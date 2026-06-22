@@ -1,0 +1,24 @@
+Type: Package
+Package: httpuv
+Title: HTTP and WebSocket server library (browser shim stub)
+Version: 1.6.17
+Authors@R: c(
+    person("Isabel", "Paredes", , "isabel.paredes@quantstack.net", role = c("aut", "cre"))
+  )
+Description: Minimal httpuv stub for browser Shiny development. Functions print
+    when called and return placeholder values until real implementations are
+    added.
+License: GPL-3
+Encoding: UTF-8
+Depends:
+    R (>= 4.0.0)
+Imports:
+    R6,
+    stats
+RoxygenNote: 7.3.2
+Collate:
+    'stub-utils.R'
+    'static-paths.R'
+    'stub-server.R'
+    'stub-websocket.R'
+    'stub-encoding.R'
