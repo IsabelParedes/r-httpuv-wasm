@@ -1,24 +1,31 @@
 Type: Package
 Package: httpuv
-Title: HTTP and WebSocket server library (browser shim stub)
+Title: HTTP and WebSocket server library (browser build)
 Version: 1.6.17
 Authors@R: c(
     person("Isabel", "Paredes", , "isabel.paredes@quantstack.net", role = c("aut", "cre"))
   )
-Description: Minimal httpuv stub for browser Shiny development. Functions print
-    when called and return placeholder values until real implementations are
-    added.
+Description: Browser-native httpuv for Shiny-Forge (Emscripten/WASM only).
+    Replaces libuv with a service-worker transport and JavaScript channel while
+    preserving the standard httpuv R API used by Shiny.
 License: GPL-3
 Encoding: UTF-8
 Depends:
     R (>= 4.0.0)
 Imports:
+    jsonlite,
+    later (>= 0.8.0),
+    promises,
     R6,
-    stats
+    stats,
+    tools
 RoxygenNote: 7.3.2
+SystemRequirements: emscripten
 Collate:
     'stub-utils.R'
     'static-paths.R'
-    'stub-server.R'
-    'stub-websocket.R'
+    'httpuv-package.R'
+    'httpuv.R'
+    'server.R'
+    'bridge.R'
     'stub-encoding.R'
