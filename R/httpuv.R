@@ -251,6 +251,11 @@ AppWrapper <- R6Class(
       for (handler in private$wsconns[[ws_key]]$messageCallbacks) {
         result <- try(handler(binary, message))
         if (inherits(result, "try-error")) {
+          cond <- attr(result, "condition")
+          message(
+            "[httpuv] onWSMessage handler error: ",
+            conditionMessage(cond)
+          )
           private$wsconns[[ws_key]]$close(
             1011,
             "Error executing onWSMessage"
