@@ -3,6 +3,8 @@
  * Loaded as a module in the Shiny app iframe; overrides Shiny.createSocket.
  */
 
+import { httpuvDebugLog } from "./debug";
+
 /** Build an absolute session URL under the Shiny app prefix. */
 function sessionUrl(action: string, opts: { handle?: string } = {}): string {
   const base = new URL("__session__/", location.href);
@@ -39,7 +41,7 @@ export class VirtualShinySocket {
   private async _connect(): Promise<void> {
     try {
       const openUrl = sessionUrl("open");
-      console.info("[shiny-socket] session open", openUrl);
+      httpuvDebugLog("socket-open", openUrl);
       const res = await fetch(openUrl, { method: "POST" });
       if (!res.ok) {
         throw new Error(`session open failed: HTTP ${res.status}`);
@@ -72,7 +74,7 @@ export class VirtualShinySocket {
       try {
         const recvUrl = sessionUrl("recv", { handle: this._handle });
         if (this._recvBootResolve) {
-          console.info("[shiny-socket] recv start", recvUrl);
+          httpuvDebugLog("socket-recv-start", recvUrl);
           this._recvBootResolve();
           this._recvBootResolve = null;
         }
@@ -107,7 +109,7 @@ export class VirtualShinySocket {
 
         const wsBinary = res.headers.get("X-Httpuv-WS-Binary") === "1";
         const data: string | ArrayBuffer = wsBinary ? await res.arrayBuffer() : await res.text();
-        console.info("[shiny-socket] recv message", {
+        httpuvDebugLog("socket-recv", {
           wsType,
           binary: wsBinary,
           bytes: typeof data === "string" ? data.length : data.byteLength,
@@ -147,7 +149,7 @@ export class VirtualShinySocket {
     }
 
     const sendUrl = sessionUrl("send", { handle: this._handle });
-    console.info("[shiny-socket] session send", sendUrl, {
+    httpuvDebugLog("socket-send", sendUrl, {
       binary: isBinary,
       bytes: byteLen,
     });

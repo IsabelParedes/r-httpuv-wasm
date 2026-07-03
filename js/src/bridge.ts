@@ -442,7 +442,7 @@ export function dispatch(msg: ChannelMessage): void {
       const handled =
         invokeROption?.(HTTPUV_OPTIONS.ON_WS_OPEN, msg.handle, msg.req) ?? false;
       if (!handled) {
-        console.info("[httpuv-bridge] ws open (no R handler yet)", msg.handle);
+        httpuvDebugLog("bridge-ws-open-no-handler", msg.handle);
       }
       break;
     }
@@ -456,7 +456,7 @@ export function dispatch(msg: ChannelMessage): void {
           msg.message,
         ) ?? false;
       if (!handled) {
-        console.info("[httpuv-bridge] ws message (no R handler yet)", msg.handle);
+        httpuvDebugLog("bridge-ws-message-no-handler", msg.handle);
         getChannel().write({
           type: CHANNEL.WS_RESPONSE,
           data: {
@@ -526,7 +526,7 @@ export function pushInboundHostMessage(msg: HostInboundMessage): void {
     case MSG.HTTP_REQUEST: {
       const session = parseSessionAction(msg.url ?? "", getShinyPrefix());
       if (session && session.action !== "recv") {
-        console.info("[httpuv-bridge] inbound session request", {
+        httpuvDebugLog("bridge-inbound-session", {
           uuid: msg.uuid,
           action: session.action,
           handle: session.handle,
@@ -535,7 +535,7 @@ export function pushInboundHostMessage(msg: HostInboundMessage): void {
         break;
       }
 
-      console.info("[httpuv-bridge] push http request", {
+      httpuvDebugLog("bridge-push-http", {
         uuid: msg.uuid,
         method: msg.method,
         url: msg.url,

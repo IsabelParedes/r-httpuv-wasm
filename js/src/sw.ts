@@ -518,7 +518,6 @@ async function handleShinyFetch(event: FetchEvent): Promise<Response> {
     cachedAppDocument &&
     !bypassAppCache
   ) {
-    console.info("[httpuv-sw] app document cache hit", request.url);
     httpuvDebugLog("sw-app-cache-hit", { uuid, url: request.url });
     return toFetchResponse(clonePendingResponse(cachedAppDocument));
   }
