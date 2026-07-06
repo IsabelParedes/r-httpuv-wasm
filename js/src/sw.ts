@@ -25,11 +25,31 @@ import type { HeaderMap, PendingResponse } from "./types";
 // entries; cast it to the service-worker global for this bundle.
 const swSelf = self as unknown as ServiceWorkerGlobalScope;
 
-const SHINY_PREFIX = resolveShinyPrefix(import.meta.url);
-const SESSION_PREFIX = resolveSessionPrefix(import.meta.url);
+/**
+ * Resolve the initial mount prefix without assuming the SW script location.
+ * The bundle may be served from a deep path (e.g. /R_HOME/library/httpuv/www/),
+ * so deriving the prefix from import.meta.url is wrong. Prefer an explicit
+ * `?shinyPrefix=` on the registration URL; otherwise default to the origin
+ * root, giving `/shiny/`. The host also confirms this via REGISTER_HOST.
+ */
+function initialShinyPrefix(): string {
+  try {
+    const own = new URL(swSelf.location.href);
+    const declared = own.searchParams.get("shinyPrefix");
+    if (declared) {
+      return declared.endsWith("/") ? declared : `${declared}/`;
+    }
+  } catch {
+    // fall through to origin-root default
+  }
+  return resolveShinyPrefix(new URL("/", swSelf.location.href).href);
+}
+
+const SHINY_PREFIX = initialShinyPrefix();
+const SESSION_PREFIX = resolveSessionPrefix(new URL("/", swSelf.location.href).href);
 void SESSION_PREFIX;
 
-/** Host-announced prefix (defaults to SW script path; updated via REGISTER_HOST). */
+/** Host-announced prefix (defaults to the origin-root mount; updated via REGISTER_HOST). */
 let shinyAppPrefix = SHINY_PREFIX;
 
 let hostClientId: string | null = null;
@@ -258,37 +278,67 @@ async function tryServeShinyStaticAsset(request: Request): Promise<Response | nu
     return null;
   }
 
+  const toStaticResponse = (
+    assetRes: Response,
+    source: string,
+  ): Response => {
+    const headers = new Headers(assetRes.headers);
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", mimeForAssetSuffix(suffix));
+    }
+    headers.set("X-Httpuv-Static", source);
+    if (request.method === "HEAD") {
+      return new Response(null, { status: 200, headers });
+    }
+    return new Response(assetRes.body, { status: 200, headers });
+  };
+
+  // 1. Known R_HOME layout (bootstrap JS, bslib components, jquery, …).
+  const fallbackPath = resolveShinyStaticRHomePath(prefix, suffix);
+  if (fallbackPath) {
+    const assetRes = await fetchRHomeAsset(fallbackPath, url);
+    if (assetRes) {
+      httpuvDebugLog("sw-static-hit", { prefix, suffix, source: "rhome-fallback", path: fallbackPath });
+      return toStaticResponse(assetRes, "rhome-fallback");
+    }
+  }
+
+  // 2. Synced shiny::resourcePaths() directories.
   const localDir = shinyResourcePaths.get(prefix);
-  const rHomeRelative =
-    (localDir ? rHomePathFromVfsDir(localDir, suffix) : null) ??
-    resolveShinyStaticRHomePath(prefix, suffix);
-  if (!rHomeRelative) {
-    return null;
+  if (localDir) {
+    if (localDir.startsWith("/R_HOME/")) {
+      const rHomeRelative = rHomePathFromVfsDir(localDir, suffix);
+      if (rHomeRelative) {
+        const assetRes = await fetchRHomeAsset(rHomeRelative, url);
+        if (assetRes) {
+          httpuvDebugLog("sw-static-hit", { prefix, suffix, source: "rhome", path: rHomeRelative });
+          return toStaticResponse(assetRes, "rhome");
+        }
+      }
+    } else {
+      // Runtime bslib/sass cache (not under /R_HOME/): read from Emscripten VFS
+      // via the worker without an R eval (avoids WASM traps on large base64 JSON).
+      try {
+        const host = await waitForRwasmHost();
+        const body = await host.readVfsFile(localDir, suffix);
+        if (body) {
+          httpuvDebugLog("sw-static-hit", { prefix, suffix, source: "vfs", path: localDir });
+          const headers = new Headers({
+            "Content-Type": mimeForAssetSuffix(suffix),
+            "X-Httpuv-Static": "vfs",
+          });
+          if (request.method === "HEAD") {
+            return new Response(null, { status: 200, headers });
+          }
+          return new Response(body, { status: 200, headers });
+        }
+      } catch (err) {
+        httpuvDebugLog("sw-vfs-read-fail", { prefix, suffix, vfsDir: localDir, err: String(err) });
+      }
+    }
   }
 
-  const assetRes = await fetchRHomeAsset(rHomeRelative, url);
-  if (!assetRes) {
-    return null;
-  }
-
-  httpuvDebugLog("sw-static-hit", {
-    prefix,
-    suffix,
-    source: localDir ? "resourcePaths" : "fallback",
-    path: rHomeRelative,
-  });
-
-  const headers = new Headers(assetRes.headers);
-  if (!headers.has("Content-Type")) {
-    headers.set("Content-Type", mimeForAssetSuffix(suffix));
-  }
-  headers.set("X-Httpuv-Static", localDir ? "rhome" : "rhome-fallback");
-
-  if (request.method === "HEAD") {
-    return new Response(null, { status: 200, headers });
-  }
-
-  return new Response(assetRes.body, { status: 200, headers });
+  return null;
 }
 
 swSelf.addEventListener("install", (event) => {

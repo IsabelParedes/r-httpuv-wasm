@@ -3,7 +3,7 @@
  *
  * Shiny serves deps at /shiny/{name}-{version}/{file} while files live under
  * package trees like library/shiny/www/shared/. This table matches stock Shiny
- * 1.14.x layout so the SW can serve assets without calling R.
+ * 1.14.x / bslib 0.11.x layout so the SW can serve assets without calling R.
  */
 interface StaticBaseRule {
   match: (prefix: string) => boolean;
@@ -18,9 +18,69 @@ const SHINY_STATIC_BASES: StaticBaseRule[] = [
     match: (p) => p.startsWith("shiny-busy-indicators-"),
     base: "library/shiny/www/shared/busy-indicators",
   },
-  { match: (p) => p.startsWith("bootstrap-"), base: "library/shiny/www/shared/bootstrap" },
   { match: (p) => p.startsWith("htmltools-fill-"), base: "library/htmltools/fill" },
+  { match: (p) => p.startsWith("strftime-"), base: "library/shiny/www/shared/strftime" },
+  {
+    match: (p) => p.startsWith("ionrangeslider-javascript-"),
+    base: "library/shiny/www/shared/ionrangeslider",
+  },
 ];
+
+/**
+ * Prefix/suffix pairs that do not follow the generic `{base}/{suffix}` layout.
+ * Returns a path relative to R_HOME/ (no leading slash), or null.
+ */
+function resolveKnownAsset(prefix: string, suffix: string): string | null {
+  if (prefix.startsWith("bootstrap-5")) {
+    if (suffix.endsWith(".js")) {
+      return `library/bslib/lib/bs5/dist/js/${basename(suffix)}`;
+    }
+    if (suffix === "bootstrap.min.css") {
+      return "library/bslib/css-precompiled/5/bootstrap.min.css";
+    }
+    return null;
+  }
+
+  if (prefix.startsWith("bslib-component-js-")) {
+    return `library/bslib/components/dist/${suffix}`;
+  }
+
+  if (prefix.startsWith("bslib-component-css-")) {
+    return `library/bslib/components/dist/${suffix}`;
+  }
+
+  if (prefix.startsWith("bslib-tag-require-")) {
+    return "library/bslib/components/tag-require.js";
+  }
+
+  if (prefix.startsWith("bs3compat-")) {
+    return `library/bslib/bs3compat/js/${suffix}`;
+  }
+
+  if (prefix.startsWith("shiny-javascript-")) {
+    return "library/shiny/www/shared/shiny.min.js";
+  }
+
+  if (prefix.startsWith("jquery-")) {
+    return `library/shiny/www/shared/${suffix}`;
+  }
+
+  // Sass-compiled or cache-only deps (selectize, ionRangeSlider CSS, shiny-sass).
+  if (
+    prefix.startsWith("selectize-") ||
+    prefix.startsWith("ionRangeSlider-") ||
+    prefix.startsWith("shiny-sass-")
+  ) {
+    return null;
+  }
+
+  return null;
+}
+
+function basename(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(slash + 1) : path;
+}
 
 /**
  * @param prefix e.g. jquery-3.7.1
@@ -30,6 +90,11 @@ const SHINY_STATIC_BASES: StaticBaseRule[] = [
 export function resolveShinyStaticRHomePath(prefix: string, suffix: string): string | null {
   if (!prefix || !suffix || suffix.includes("..")) {
     return null;
+  }
+
+  const known = resolveKnownAsset(prefix, suffix);
+  if (known) {
+    return known;
   }
 
   for (const rule of SHINY_STATIC_BASES) {
@@ -50,8 +115,9 @@ export function rHomePathFromVfsDir(vfsDir: string, suffix: string): string | nu
     return null;
   }
   const normalized = vfsDir.replace(/\/$/, "");
-  const fetchPath = normalized.startsWith("/R_HOME/")
-    ? normalized.slice("/R_HOME/".length)
-    : normalized.replace(/^\//, "");
+  if (!normalized.startsWith("/R_HOME/")) {
+    return null;
+  }
+  const fetchPath = normalized.slice("/R_HOME/".length);
   return `${fetchPath}/${suffix}`.replace(/\/+/g, "/");
 }
