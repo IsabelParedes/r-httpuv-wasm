@@ -17,8 +17,7 @@ Imports:
     later (>= 0.8.0),
     promises,
     R6,
-    stats,
-    tools
+    stats
 RoxygenNote: 7.3.2
 SystemRequirements: emscripten
 Collate:

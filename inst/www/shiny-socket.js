@@ -1,3 +1,35 @@
+// src/debug.ts
+function isHttpuvDebug() {
+  if (globalThis.__HTTPUV_DEBUG__) {
+    return true;
+  }
+  try {
+    if (typeof location !== "undefined") {
+      const params = new URLSearchParams(location.search);
+      if (params.has("httpuvDebug") || params.get("debug") === "httpuv") {
+        return true;
+      }
+    }
+    if (typeof localStorage !== "undefined" && localStorage.getItem("shinyForgeDebug") === "1") {
+      return true;
+    }
+    if (typeof self !== "undefined" && self.location?.href) {
+      const params = new URL(self.location.href).searchParams;
+      if (params.has("httpuvDebug") || params.get("debug") === "httpuv") {
+        return true;
+      }
+    }
+  } catch {
+  }
+  return false;
+}
+function httpuvDebugLog(stage, ...args) {
+  if (!isHttpuvDebug()) {
+    return;
+  }
+  console.info(`[httpuv-debug:${stage}]`, ...args);
+}
+
 // src/shiny-socket.ts
 function sessionUrl(action, opts = {}) {
   const base = new URL("__session__/", location.href);
@@ -23,7 +55,7 @@ var _VirtualShinySocket = class _VirtualShinySocket {
   async _connect() {
     try {
       const openUrl = sessionUrl("open");
-      console.info("[shiny-socket] session open", openUrl);
+      httpuvDebugLog("socket-open", openUrl);
       const res = await fetch(openUrl, { method: "POST" });
       if (!res.ok) {
         throw new Error(`session open failed: HTTP ${res.status}`);
@@ -53,7 +85,7 @@ var _VirtualShinySocket = class _VirtualShinySocket {
       try {
         const recvUrl = sessionUrl("recv", { handle: this._handle });
         if (this._recvBootResolve) {
-          console.info("[shiny-socket] recv start", recvUrl);
+          httpuvDebugLog("socket-recv-start", recvUrl);
           this._recvBootResolve();
           this._recvBootResolve = null;
         }
@@ -85,7 +117,7 @@ var _VirtualShinySocket = class _VirtualShinySocket {
         }
         const wsBinary = res.headers.get("X-Httpuv-WS-Binary") === "1";
         const data = wsBinary ? await res.arrayBuffer() : await res.text();
-        console.info("[shiny-socket] recv message", {
+        httpuvDebugLog("socket-recv", {
           wsType,
           binary: wsBinary,
           bytes: typeof data === "string" ? data.length : data.byteLength
@@ -122,7 +154,7 @@ var _VirtualShinySocket = class _VirtualShinySocket {
       isBinary = true;
     }
     const sendUrl = sessionUrl("send", { handle: this._handle });
-    console.info("[shiny-socket] session send", sendUrl, {
+    httpuvDebugLog("socket-send", sendUrl, {
       binary: isBinary,
       bytes: byteLen
     });

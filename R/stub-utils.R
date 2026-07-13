@@ -72,3 +72,30 @@ logLevel <- function(level = NULL) {
 named_list <- function() {
   list(a = 1)[0]
 }
+
+#' Guess a Content-Type from a file path (pure R; no native mime package).
+httpuv_guess_mime_type <- function(path) {
+  ext <- tolower(sub("^.*\\.", "", basename(path)))
+  if (!nzchar(ext) || identical(ext, tolower(basename(path)))) {
+    return("application/octet-stream")
+  }
+  switch(ext,
+    js = "application/javascript",
+    mjs = "application/javascript",
+    css = "text/css",
+    html = "text/html",
+    htm = "text/html",
+    json = "application/json",
+    svg = "image/svg+xml",
+    png = "image/png",
+    jpg = "image/jpeg",
+    jpeg = "image/jpeg",
+    gif = "image/gif",
+    ico = "image/x-icon",
+    woff = "font/woff",
+    woff2 = "font/woff2",
+    ttf = "font/ttf",
+    map = "application/json",
+    "application/octet-stream"
+  )
+}

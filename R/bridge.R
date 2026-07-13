@@ -256,17 +256,24 @@ httpuv_try_serve_static <- function(app_wrapper, req) {
       next
     }
 
-    body <- readBin(file_path, "raw", file.info(file_path)$size)
-    mime <- tools::mime_type(file_path)
-    if (is.na(mime)) {
-      mime <- "application/octet-stream"
+    static_resp <- tryCatch(
+      {
+        body <- readBin(file_path, "raw", file.info(file_path)$size)
+        mime <- httpuv_guess_mime_type(file_path)
+        list(
+          status = 200L,
+          headers = list(`Content-Type` = mime),
+          body = body
+        )
+      },
+      error = function(e) {
+        message("[httpuv] static read failed: ", file_path, " (", conditionMessage(e), ")")
+        NULL
+      }
+    )
+    if (!is.null(static_resp)) {
+      return(static_resp)
     }
-
-    return(list(
-      status = 200L,
-      headers = list(`Content-Type` = mime),
-      body = body
-    ))
   }
 
   NULL

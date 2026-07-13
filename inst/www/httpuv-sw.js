@@ -473,12 +473,57 @@ var SHINY_STATIC_BASES = [
     match: (p) => p.startsWith("shiny-busy-indicators-"),
     base: "library/shiny/www/shared/busy-indicators"
   },
-  { match: (p) => p.startsWith("bootstrap-"), base: "library/shiny/www/shared/bootstrap" },
-  { match: (p) => p.startsWith("htmltools-fill-"), base: "library/htmltools/fill" }
+  { match: (p) => p.startsWith("htmltools-fill-"), base: "library/htmltools/fill" },
+  { match: (p) => p.startsWith("strftime-"), base: "library/shiny/www/shared/strftime" },
+  {
+    match: (p) => p.startsWith("ionrangeslider-javascript-"),
+    base: "library/shiny/www/shared/ionrangeslider"
+  }
 ];
+function resolveKnownAsset(prefix, suffix) {
+  if (prefix.startsWith("bootstrap-5")) {
+    if (suffix.endsWith(".js")) {
+      return `library/bslib/lib/bs5/dist/js/${basename(suffix)}`;
+    }
+    if (suffix === "bootstrap.min.css") {
+      return "library/bslib/css-precompiled/5/bootstrap.min.css";
+    }
+    return null;
+  }
+  if (prefix.startsWith("bslib-component-js-")) {
+    return `library/bslib/components/dist/${suffix}`;
+  }
+  if (prefix.startsWith("bslib-component-css-")) {
+    return `library/bslib/components/dist/${suffix}`;
+  }
+  if (prefix.startsWith("bslib-tag-require-")) {
+    return "library/bslib/components/tag-require.js";
+  }
+  if (prefix.startsWith("bs3compat-")) {
+    return `library/bslib/bs3compat/js/${suffix}`;
+  }
+  if (prefix.startsWith("shiny-javascript-")) {
+    return "library/shiny/www/shared/shiny.min.js";
+  }
+  if (prefix.startsWith("jquery-")) {
+    return `library/shiny/www/shared/${suffix}`;
+  }
+  if (prefix.startsWith("selectize-") || prefix.startsWith("ionRangeSlider-") || prefix.startsWith("shiny-sass-")) {
+    return null;
+  }
+  return null;
+}
+function basename(path) {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(slash + 1) : path;
+}
 function resolveShinyStaticRHomePath(prefix, suffix) {
   if (!prefix || !suffix || suffix.includes("..")) {
     return null;
+  }
+  const known = resolveKnownAsset(prefix, suffix);
+  if (known) {
+    return known;
   }
   for (const rule of SHINY_STATIC_BASES) {
     if (rule.match(prefix)) {
@@ -492,14 +537,28 @@ function rHomePathFromVfsDir(vfsDir, suffix) {
     return null;
   }
   const normalized = vfsDir.replace(/\/$/, "");
-  const fetchPath = normalized.startsWith("/R_HOME/") ? normalized.slice("/R_HOME/".length) : normalized.replace(/^\//, "");
+  if (!normalized.startsWith("/R_HOME/")) {
+    return null;
+  }
+  const fetchPath = normalized.slice("/R_HOME/".length);
   return `${fetchPath}/${suffix}`.replace(/\/+/g, "/");
 }
 
 // src/sw.ts
 var swSelf = self;
-var SHINY_PREFIX = resolveShinyPrefix(import.meta.url);
-resolveSessionPrefix(import.meta.url);
+function initialShinyPrefix() {
+  try {
+    const own = new URL(swSelf.location.href);
+    const declared = own.searchParams.get("shinyPrefix");
+    if (declared) {
+      return declared.endsWith("/") ? declared : `${declared}/`;
+    }
+  } catch {
+  }
+  return resolveShinyPrefix(new URL("/", swSelf.location.href).href);
+}
+var SHINY_PREFIX = initialShinyPrefix();
+resolveSessionPrefix(new URL("/", swSelf.location.href).href);
 var shinyAppPrefix = SHINY_PREFIX;
 var hostClientId = null;
 var rwasmHost = null;
@@ -663,30 +722,57 @@ async function tryServeShinyStaticAsset(request) {
   if (!suffix || suffix.includes("..")) {
     return null;
   }
+  const toStaticResponse = (assetRes, source) => {
+    const headers = new Headers(assetRes.headers);
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", mimeForAssetSuffix(suffix));
+    }
+    headers.set("X-Httpuv-Static", source);
+    if (request.method === "HEAD") {
+      return new Response(null, { status: 200, headers });
+    }
+    return new Response(assetRes.body, { status: 200, headers });
+  };
+  const fallbackPath = resolveShinyStaticRHomePath(prefix, suffix);
+  if (fallbackPath) {
+    const assetRes = await fetchRHomeAsset(fallbackPath, url);
+    if (assetRes) {
+      httpuvDebugLog("sw-static-hit", { prefix, suffix, source: "rhome-fallback", path: fallbackPath });
+      return toStaticResponse(assetRes, "rhome-fallback");
+    }
+  }
   const localDir = shinyResourcePaths.get(prefix);
-  const rHomeRelative = (localDir ? rHomePathFromVfsDir(localDir, suffix) : null) ?? resolveShinyStaticRHomePath(prefix, suffix);
-  if (!rHomeRelative) {
-    return null;
+  if (localDir) {
+    if (localDir.startsWith("/R_HOME/")) {
+      const rHomeRelative = rHomePathFromVfsDir(localDir, suffix);
+      if (rHomeRelative) {
+        const assetRes = await fetchRHomeAsset(rHomeRelative, url);
+        if (assetRes) {
+          httpuvDebugLog("sw-static-hit", { prefix, suffix, source: "rhome", path: rHomeRelative });
+          return toStaticResponse(assetRes, "rhome");
+        }
+      }
+    } else {
+      try {
+        const host = await waitForRwasmHost();
+        const body = await host.readVfsFile(localDir, suffix);
+        if (body) {
+          httpuvDebugLog("sw-static-hit", { prefix, suffix, source: "vfs", path: localDir });
+          const headers = new Headers({
+            "Content-Type": mimeForAssetSuffix(suffix),
+            "X-Httpuv-Static": "vfs"
+          });
+          if (request.method === "HEAD") {
+            return new Response(null, { status: 200, headers });
+          }
+          return new Response(body, { status: 200, headers });
+        }
+      } catch (err) {
+        httpuvDebugLog("sw-vfs-read-fail", { prefix, suffix, vfsDir: localDir, err: String(err) });
+      }
+    }
   }
-  const assetRes = await fetchRHomeAsset(rHomeRelative, url);
-  if (!assetRes) {
-    return null;
-  }
-  httpuvDebugLog("sw-static-hit", {
-    prefix,
-    suffix,
-    source: localDir ? "resourcePaths" : "fallback",
-    path: rHomeRelative
-  });
-  const headers = new Headers(assetRes.headers);
-  if (!headers.has("Content-Type")) {
-    headers.set("Content-Type", mimeForAssetSuffix(suffix));
-  }
-  headers.set("X-Httpuv-Static", localDir ? "rhome" : "rhome-fallback");
-  if (request.method === "HEAD") {
-    return new Response(null, { status: 200, headers });
-  }
-  return new Response(assetRes.body, { status: 200, headers });
+  return null;
 }
 swSelf.addEventListener("install", (event) => {
   console.info("[httpuv-sw] installing, shiny prefix:", SHINY_PREFIX);
@@ -892,7 +978,6 @@ async function handleShinyFetch(event) {
   httpuvDebugLog("sw-request", { uuid, method: request.method, url: request.url });
   const bypassAppCache = request.headers.get(WARMUP_REQUEST_HEADER) === "1";
   if (request.method === "GET" && isAppDocumentRequest(request.url) && cachedAppDocument && !bypassAppCache) {
-    console.info("[httpuv-sw] app document cache hit", request.url);
     httpuvDebugLog("sw-app-cache-hit", { uuid, url: request.url });
     return toFetchResponse(clonePendingResponse(cachedAppDocument));
   }

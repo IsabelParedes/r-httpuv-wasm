@@ -233,6 +233,7 @@ interface RHostApi {
     registerSwDelivery(port: MessagePort): void | Promise<void>;
     deliverHttpRequest(req: unknown): Promise<void>;
     getShinyResourcePaths(): Promise<Record<string, string>>;
+    readVfsFile(vfsDir: string, suffix: string): Promise<ArrayBuffer | null>;
     stop(): void | Promise<void>;
 }
 
