@@ -1093,6 +1093,10 @@ swSelf.addEventListener("fetch", (event) => {
 });
 swSelf.addEventListener("message", (event) => {
   const msg = event.data;
+  if (msg === "skipWaiting" || msg?.type === "SKIP_WAITING") {
+    void swSelf.skipWaiting();
+    return;
+  }
   if (!msg || typeof msg !== "object") {
     return;
   }
