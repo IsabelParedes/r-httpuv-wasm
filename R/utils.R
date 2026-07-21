@@ -37,12 +37,16 @@ httpuv_version <- local({
 # Given a vector/list, return TRUE if any elements are unnamed, FALSE otherwise.
 any_unnamed <- function(x) {
   # Zero-length vector
-  if (length(x) == 0) return(FALSE)
+  if (length(x) == 0) {
+    return(FALSE)
+  }
 
   nms <- names(x)
 
   # List with no name attribute
-  if (is.null(nms)) return(TRUE)
+  if (is.null(nms)) {
+    return(TRUE)
+  }
 
   # List with name attribute; check for any ""
   any(!nzchar(nms))
@@ -59,13 +63,30 @@ drop_duplicate_names <- function(x) {
 
 
 #' Get and set logging level
+#'
+#' The logging level for httpuv can be set to report differing levels of
+#' information. Possible logging levels (from least to most information
+#' reported) are: `"OFF"`, `"ERROR"`, `"WARN"`, `"INFO"`, or
+#' `"DEBUG"`. The default level is `ERROR`.
+#'
+#' @param level The logging level. Must be one of `NULL`, `"OFF"`,
+#'   `"ERROR"`, `"WARN"`, `"INFO"`, or `"DEBUG"`. If
+#'   `NULL` (the default), then this function simply returns the current
+#'   logging level.
+#'
+#' @return If `level=NULL`, then this returns the current logging level. If
+#'   `level` is any other value, then this returns the previous logging
+#'   level, from before it is set to the new value.
+#'
 #' @keywords internal
 logLevel <- function(level = NULL) {
   if (is.null(level)) {
-    return("OFF")
+    level <- ""
+    log_level("")
+  } else {
+    level <- match.arg(level, c("OFF", "ERROR", "WARN", "INFO", "DEBUG"))
+    invisible(log_level(level))
   }
-  match.arg(level, c("OFF", "ERROR", "WARN", "INFO", "DEBUG"))
-  invisible(level)
 }
 
 # Create an empty named list

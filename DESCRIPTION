@@ -5,9 +5,9 @@ Version: 1.6.17
 Authors@R: c(
     person("Isabel", "Paredes", , "isabel.paredes@quantstack.net", role = c("aut", "cre"))
   )
-Description: Browser-native httpuv for Shiny-Forge (Emscripten/WASM only).
+Description: Browser-native httpuv for Shiny (Emscripten/WASM only).
     Replaces libuv with a service-worker transport and JavaScript channel while
-    preserving the standard httpuv R API used by Shiny.
+    preserving the standard httpuv R API.
 License: GPL-3
 Encoding: UTF-8
 Depends:
@@ -21,10 +21,10 @@ Imports:
 RoxygenNote: 7.3.2
 SystemRequirements: emscripten
 Collate:
-    'stub-utils.R'
-    'static-paths.R'
+    'bridge.R'
+    'encoding.R'
     'httpuv-package.R'
     'httpuv.R'
     'server.R'
-    'bridge.R'
-    'stub-encoding.R'
+    'static-paths.R'
+    'utils.R'
