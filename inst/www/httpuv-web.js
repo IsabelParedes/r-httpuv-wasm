@@ -3,6 +3,7 @@ var WS_FRAME = {
   SEND: "websocket.send",
   CLOSE: "websocket.close"
 };
+var WASM_R_HOME = "/lib/R";
 var REQUEST_TIMEOUT_MS = 18e4;
 var SESSION_RECV_TIMEOUT_MS = 25e3;
 var MSG = {
@@ -84,6 +85,22 @@ function enableHttpuvDebug() {
 
 // src/prefix.ts
 var shinyPrefix = null;
+var hostPrefixDir = null;
+function normalizeHostPrefixDir(prefix) {
+  return prefix.replace(/^\/+|\/+$/g, "");
+}
+function setHostPrefixDir(prefix) {
+  hostPrefixDir = normalizeHostPrefixDir(prefix);
+}
+function getHostPrefixDir() {
+  if (!hostPrefixDir) {
+    throw new Error("Host prefix directory not initialized");
+  }
+  return hostPrefixDir;
+}
+function tryGetHostPrefixDir() {
+  return hostPrefixDir;
+}
 function resolveShinyPrefix(fromUrl) {
   const prefix = new URL("shiny/", fromUrl).pathname;
   return prefix.endsWith("/") ? prefix : `${prefix}/`;
@@ -791,6 +808,6 @@ invisible(TRUE)`;
 // src/index.ts
 var HTTPUV_TRANSPORT_VERSION = "0.0.0";
 
-export { CHANNEL, COMLINK, HOST_DIR, HTTPUV_OPTIONS, HTTPUV_TRANSPORT_VERSION, MSG, REQUEST_TIMEOUT_MS, SESSION_DIR, SESSION_RECV_TIMEOUT_MS, WARMUP_REQUEST_HEADER, WS_FRAME, buildReq, channelMessageToRExpr, dispatch, drainInboundChannel, enableHttpuvDebug, flushDeferredOutbound, getSessionPrefix, getShinyPrefix, handleInboundHostMessage, httpuvDebugLog, injectShinySocketBootstrap, installHttpuvBridge, isHostPushUrl, isHttpuvDebug, isLikelyStaticAsset, isSessionHttpRequest, jsonForR, normalizeSessionHandle, parseSessionAction, pushInboundChannelMessage, pushInboundHostMessage, resolveSessionPrefix, resolveShinyPrefix, serializeReqForR, setInvokeROption, setPushToR, setShinyPrefix, shinyAppUrl, shinySocketScriptUrl };
+export { CHANNEL, COMLINK, HOST_DIR, HTTPUV_OPTIONS, HTTPUV_TRANSPORT_VERSION, MSG, REQUEST_TIMEOUT_MS, SESSION_DIR, SESSION_RECV_TIMEOUT_MS, WARMUP_REQUEST_HEADER, WASM_R_HOME, WS_FRAME, buildReq, channelMessageToRExpr, dispatch, drainInboundChannel, enableHttpuvDebug, flushDeferredOutbound, getHostPrefixDir, getSessionPrefix, getShinyPrefix, handleInboundHostMessage, httpuvDebugLog, injectShinySocketBootstrap, installHttpuvBridge, isHostPushUrl, isHttpuvDebug, isLikelyStaticAsset, isSessionHttpRequest, jsonForR, normalizeSessionHandle, parseSessionAction, pushInboundChannelMessage, pushInboundHostMessage, resolveSessionPrefix, resolveShinyPrefix, serializeReqForR, setHostPrefixDir, setInvokeROption, setPushToR, setShinyPrefix, shinyAppUrl, shinySocketScriptUrl, tryGetHostPrefixDir };
 //# sourceMappingURL=httpuv-web.js.map
 //# sourceMappingURL=httpuv-web.js.map

@@ -7,6 +7,7 @@ var __export = (target, all) => {
 // src/constants.ts
 var WS_FRAME = {
   SEND: "websocket.send"};
+var WASM_R_HOME = "/lib/R";
 var REQUEST_TIMEOUT_MS = 18e4;
 var SESSION_RECV_TIMEOUT_MS = 25e3;
 var MSG = {
@@ -427,6 +428,16 @@ function httpuvDebugLog(stage, ...args) {
 }
 
 // src/prefix.ts
+var hostPrefixDir = null;
+function normalizeHostPrefixDir(prefix) {
+  return prefix.replace(/^\/+|\/+$/g, "");
+}
+function setHostPrefixDir(prefix) {
+  hostPrefixDir = normalizeHostPrefixDir(prefix);
+}
+function tryGetHostPrefixDir() {
+  return hostPrefixDir;
+}
 function resolveShinyPrefix(fromUrl) {
   const prefix = new URL("shiny/", fromUrl).pathname;
   return prefix.endsWith("/") ? prefix : `${prefix}/`;
@@ -465,6 +476,11 @@ function isHostPushUrl(urlString, prefix) {
 }
 
 // src/static-resolve.ts
+function rHomeAssetHttpPath(hostPrefixDir2, rHomeRelative) {
+  const hostPrefix = hostPrefixDir2.replace(/^\/+|\/+$/g, "");
+  return `/${hostPrefix}${WASM_R_HOME}/${rHomeRelative}`.replace(/\/+/g, "/");
+}
+var WASM_R_HOME_PREFIX = `${WASM_R_HOME}/`;
 var SHINY_STATIC_BASES = [
   { match: (p) => p.startsWith("jquery-"), base: "library/shiny/www/shared" },
   { match: (p) => p.startsWith("shiny-css-"), base: "library/shiny/www/shared" },
@@ -537,10 +553,10 @@ function rHomePathFromVfsDir(vfsDir, suffix) {
     return null;
   }
   const normalized = vfsDir.replace(/\/$/, "");
-  if (!normalized.startsWith("/R_HOME/")) {
+  if (!normalized.startsWith(WASM_R_HOME_PREFIX)) {
     return null;
   }
-  const fetchPath = normalized.slice("/R_HOME/".length);
+  const fetchPath = normalized.slice(WASM_R_HOME_PREFIX.length);
   return `${fetchPath}/${suffix}`.replace(/\/+/g, "/");
 }
 
@@ -556,6 +572,21 @@ function initialShinyPrefix() {
   } catch {
   }
   return resolveShinyPrefix(new URL("/", swSelf.location.href).href);
+}
+function initialHostPrefixDir() {
+  try {
+    const own = new URL(swSelf.location.href);
+    const declared = own.searchParams.get("hostPrefix");
+    if (declared) {
+      return declared.replace(/^\/+|\/+$/g, "");
+    }
+  } catch {
+  }
+  return null;
+}
+var declaredHostPrefixDir = initialHostPrefixDir();
+if (declaredHostPrefixDir) {
+  setHostPrefixDir(declaredHostPrefixDir);
 }
 var SHINY_PREFIX = initialShinyPrefix();
 resolveSessionPrefix(new URL("/", swSelf.location.href).href);
@@ -692,7 +723,15 @@ function mimeForAssetSuffix(suffix) {
   return "application/octet-stream";
 }
 async function fetchRHomeAsset(rHomeRelative, originUrl) {
-  const assetUrl = new URL(`R_HOME/${rHomeRelative}`, originUrl.origin);
+  const hostPrefixDir2 = tryGetHostPrefixDir();
+  if (!hostPrefixDir2) {
+    httpuvDebugLog("sw-static-miss", {
+      path: rHomeRelative,
+      reason: "hostPrefix not configured"
+    });
+    return null;
+  }
+  const assetUrl = new URL(rHomeAssetHttpPath(hostPrefixDir2, rHomeRelative), originUrl.origin);
   const assetRes = await fetch(assetUrl, { cache: "force-cache" });
   if (!assetRes.ok) {
     httpuvDebugLog("sw-static-miss", {
@@ -743,7 +782,7 @@ async function tryServeShinyStaticAsset(request) {
   }
   const localDir = shinyResourcePaths.get(prefix);
   if (localDir) {
-    if (localDir.startsWith("/R_HOME/")) {
+    if (localDir.startsWith(`${WASM_R_HOME}/`)) {
       const rHomeRelative = rHomePathFromVfsDir(localDir, suffix);
       if (rHomeRelative) {
         const assetRes = await fetchRHomeAsset(rHomeRelative, url);
@@ -1071,6 +1110,9 @@ swSelf.addEventListener("message", (event) => {
     case MSG.REGISTER_HOST: {
       if (typeof msg.shinyPrefix === "string" && msg.shinyPrefix) {
         shinyAppPrefix = msg.shinyPrefix.endsWith("/") ? msg.shinyPrefix : `${msg.shinyPrefix}/`;
+      }
+      if (typeof msg.hostPrefix === "string" && msg.hostPrefix) {
+        setHostPrefixDir(msg.hostPrefix);
       }
       const source = event.source;
       if (source && "id" in source) {

@@ -4,6 +4,9 @@ export const WS_FRAME = {
   CLOSE: "websocket.close",
 } as const;
 
+/** R_HOME inside the mounted wasm prefix (VFS root is /). */
+export const WASM_R_HOME = "/lib/R";
+
 /** Max time the service worker waits for the R worker to answer a request. */
 export const REQUEST_TIMEOUT_MS = 180_000;
 

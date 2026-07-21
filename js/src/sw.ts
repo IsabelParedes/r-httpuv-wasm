@@ -5,6 +5,7 @@ import {
   MSG,
   REQUEST_TIMEOUT_MS,
   SESSION_RECV_TIMEOUT_MS,
+  WASM_R_HOME,
   WARMUP_REQUEST_HEADER,
   WS_FRAME,
 } from "./constants";
@@ -17,8 +18,10 @@ import {
   parseSessionAction,
   resolveSessionPrefix,
   resolveShinyPrefix,
+  setHostPrefixDir,
+  tryGetHostPrefixDir,
 } from "./prefix";
-import { resolveShinyStaticRHomePath, rHomePathFromVfsDir } from "./static-resolve";
+import { resolveShinyStaticRHomePath, rHomeAssetHttpPath, rHomePathFromVfsDir } from "./static-resolve";
 import type { HeaderMap, PendingResponse } from "./types";
 
 // `self` is typed as Window because the DOM lib is enabled for the other
@@ -27,10 +30,11 @@ const swSelf = self as unknown as ServiceWorkerGlobalScope;
 
 /**
  * Resolve the initial mount prefix without assuming the SW script location.
- * The bundle may be served from a deep path (e.g. /R_HOME/library/httpuv/www/),
+ * The bundle may be served from a deep path (e.g. /_env-wasm/lib/R/library/httpuv/www/),
  * so deriving the prefix from import.meta.url is wrong. Prefer an explicit
  * `?shinyPrefix=` on the registration URL; otherwise default to the origin
  * root, giving `/shiny/`. The host also confirms this via REGISTER_HOST.
+ * Likewise `?hostPrefix=` names the host directory for static R assets.
  */
 function initialShinyPrefix(): string {
   try {
@@ -43,6 +47,24 @@ function initialShinyPrefix(): string {
     // fall through to origin-root default
   }
   return resolveShinyPrefix(new URL("/", swSelf.location.href).href);
+}
+
+function initialHostPrefixDir(): string | null {
+  try {
+    const own = new URL(swSelf.location.href);
+    const declared = own.searchParams.get("hostPrefix");
+    if (declared) {
+      return declared.replace(/^\/+|\/+$/g, "");
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+const declaredHostPrefixDir = initialHostPrefixDir();
+if (declaredHostPrefixDir) {
+  setHostPrefixDir(declaredHostPrefixDir);
 }
 
 const SHINY_PREFIX = initialShinyPrefix();
@@ -164,7 +186,7 @@ const queuedWsPush = new Map<string, WsPushMsg[]>();
 /** Cached GET /shiny/ document so warmup and iframe do not each trigger a full R render. */
 let cachedAppDocument: PendingResponse | null = null;
 
-/** addResourcePath prefix -> VFS directory (e.g. jquery-3.7.1 -> /R_HOME/library/shiny/www/shared). */
+/** addResourcePath prefix -> VFS directory (e.g. jquery-3.7.1 -> /lib/R/library/shiny/www/shared). */
 let shinyResourcePaths = new Map<string, string>();
 
 function isAppDocumentRequest(urlString: string): boolean {
@@ -242,7 +264,15 @@ function mimeForAssetSuffix(suffix: string): string {
 }
 
 async function fetchRHomeAsset(rHomeRelative: string, originUrl: URL): Promise<Response | null> {
-  const assetUrl = new URL(`R_HOME/${rHomeRelative}`, originUrl.origin);
+  const hostPrefixDir = tryGetHostPrefixDir();
+  if (!hostPrefixDir) {
+    httpuvDebugLog("sw-static-miss", {
+      path: rHomeRelative,
+      reason: "hostPrefix not configured",
+    });
+    return null;
+  }
+  const assetUrl = new URL(rHomeAssetHttpPath(hostPrefixDir, rHomeRelative), originUrl.origin);
   const assetRes = await fetch(assetUrl, { cache: "force-cache" });
   if (!assetRes.ok) {
     httpuvDebugLog("sw-static-miss", {
@@ -255,7 +285,7 @@ async function fetchRHomeAsset(rHomeRelative: string, originUrl: URL): Promise<R
   return assetRes;
 }
 
-/** Serve Shiny web dependencies from the preloaded R_HOME tree (no R eval). */
+/** Serve Shiny web dependencies from the preloaded wasm prefix (no R eval). */
 async function tryServeShinyStaticAsset(request: Request): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return null;
@@ -293,7 +323,7 @@ async function tryServeShinyStaticAsset(request: Request): Promise<Response | nu
     return new Response(assetRes.body, { status: 200, headers });
   };
 
-  // 1. Known R_HOME layout (bootstrap JS, bslib components, jquery, …).
+  // 1. Known R library layout (bootstrap JS, bslib components, jquery, …).
   const fallbackPath = resolveShinyStaticRHomePath(prefix, suffix);
   if (fallbackPath) {
     const assetRes = await fetchRHomeAsset(fallbackPath, url);
@@ -306,7 +336,7 @@ async function tryServeShinyStaticAsset(request: Request): Promise<Response | nu
   // 2. Synced shiny::resourcePaths() directories.
   const localDir = shinyResourcePaths.get(prefix);
   if (localDir) {
-    if (localDir.startsWith("/R_HOME/")) {
+    if (localDir.startsWith(`${WASM_R_HOME}/`)) {
       const rHomeRelative = rHomePathFromVfsDir(localDir, suffix);
       if (rHomeRelative) {
         const assetRes = await fetchRHomeAsset(rHomeRelative, url);
@@ -316,7 +346,7 @@ async function tryServeShinyStaticAsset(request: Request): Promise<Response | nu
         }
       }
     } else {
-      // Runtime bslib/sass cache (not under /R_HOME/): read from Emscripten VFS
+      // Runtime bslib/sass cache (not under /lib/R/): read from Emscripten VFS
       // via the worker without an R eval (avoids WASM traps on large base64 JSON).
       try {
         const host = await waitForRwasmHost();
@@ -685,6 +715,9 @@ swSelf.addEventListener("message", (event) => {
     case MSG.REGISTER_HOST: {
       if (typeof msg.shinyPrefix === "string" && msg.shinyPrefix) {
         shinyAppPrefix = msg.shinyPrefix.endsWith("/") ? msg.shinyPrefix : `${msg.shinyPrefix}/`;
+      }
+      if (typeof msg.hostPrefix === "string" && msg.hostPrefix) {
+        setHostPrefixDir(msg.hostPrefix);
       }
       const source = event.source;
       if (source && "id" in source) {

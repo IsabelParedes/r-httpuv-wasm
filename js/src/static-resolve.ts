@@ -1,10 +1,20 @@
 /**
- * Map Shiny addResourcePath URL prefixes to paths under the served R_HOME tree.
+ * Map Shiny addResourcePath URL prefixes to paths under the wasm R tree.
  *
  * Shiny serves deps at /shiny/{name}-{version}/{file} while files live under
  * package trees like library/shiny/www/shared/. This table matches stock Shiny
  * 1.14.x / bslib 0.11.x layout so the SW can serve assets without calling R.
  */
+import { WASM_R_HOME } from "./constants";
+
+/** HTTP path for a file relative to R_HOME (no leading slash on the relative part). */
+export function rHomeAssetHttpPath(hostPrefixDir: string, rHomeRelative: string): string {
+  const hostPrefix = hostPrefixDir.replace(/^\/+|\/+$/g, "");
+  return `/${hostPrefix}${WASM_R_HOME}/${rHomeRelative}`.replace(/\/+/g, "/");
+}
+
+const WASM_R_HOME_PREFIX = `${WASM_R_HOME}/`;
+
 interface StaticBaseRule {
   match: (prefix: string) => boolean;
   base: string;
@@ -115,9 +125,9 @@ export function rHomePathFromVfsDir(vfsDir: string, suffix: string): string | nu
     return null;
   }
   const normalized = vfsDir.replace(/\/$/, "");
-  if (!normalized.startsWith("/R_HOME/")) {
+  if (!normalized.startsWith(WASM_R_HOME_PREFIX)) {
     return null;
   }
-  const fetchPath = normalized.slice("/R_HOME/".length);
+  const fetchPath = normalized.slice(WASM_R_HOME_PREFIX.length);
   return `${fetchPath}/${suffix}`.replace(/\/+/g, "/");
 }

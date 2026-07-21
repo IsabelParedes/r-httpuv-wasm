@@ -1,4 +1,28 @@
 let shinyPrefix: string | null = null;
+let hostPrefixDir: string | null = null;
+
+function normalizeHostPrefixDir(prefix: string): string {
+  return prefix.replace(/^\/+|\/+$/g, "");
+}
+
+/**
+ * Host directory name under the site root where the wasm prefix tree is served
+ * (e.g. `_env-wasm` → `/_env-wasm/...` over HTTP). Configured by the host app.
+ */
+export function setHostPrefixDir(prefix: string): void {
+  hostPrefixDir = normalizeHostPrefixDir(prefix);
+}
+
+export function getHostPrefixDir(): string {
+  if (!hostPrefixDir) {
+    throw new Error("Host prefix directory not initialized");
+  }
+  return hostPrefixDir;
+}
+
+export function tryGetHostPrefixDir(): string | null {
+  return hostPrefixDir;
+}
 
 /**
  * Resolve the virtual Shiny app prefix from a module script URL.
