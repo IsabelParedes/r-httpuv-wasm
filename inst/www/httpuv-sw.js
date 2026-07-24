@@ -478,7 +478,8 @@ function isHostPushUrl(urlString, prefix) {
 // src/static-resolve.ts
 function rHomeAssetHttpPath(hostPrefixDir2, rHomeRelative) {
   const hostPrefix = hostPrefixDir2.replace(/^\/+|\/+$/g, "");
-  return `/${hostPrefix}${WASM_R_HOME}/${rHomeRelative}`.replace(/\/+/g, "/");
+  const rel = rHomeRelative.replace(/^\/+/, "");
+  return `${hostPrefix}${WASM_R_HOME}/${rel}`.replace(/\/+/g, "/").replace(/^\//, "");
 }
 var WASM_R_HOME_PREFIX = `${WASM_R_HOME}/`;
 var SHINY_STATIC_BASES = [
@@ -722,7 +723,14 @@ function mimeForAssetSuffix(suffix) {
   }
   return "application/octet-stream";
 }
-async function fetchRHomeAsset(rHomeRelative, originUrl) {
+function siteRootUrl(fallbackOrigin) {
+  const scope = swSelf.registration?.scope;
+  if (scope) {
+    return new URL(scope);
+  }
+  return new URL("/", fallbackOrigin.origin);
+}
+async function fetchRHomeAsset(rHomeRelative, requestUrl) {
   const hostPrefixDir2 = tryGetHostPrefixDir();
   if (!hostPrefixDir2) {
     httpuvDebugLog("sw-static-miss", {
@@ -731,7 +739,7 @@ async function fetchRHomeAsset(rHomeRelative, originUrl) {
     });
     return null;
   }
-  const assetUrl = new URL(rHomeAssetHttpPath(hostPrefixDir2, rHomeRelative), originUrl.origin);
+  const assetUrl = new URL(rHomeAssetHttpPath(hostPrefixDir2, rHomeRelative), siteRootUrl(requestUrl));
   const assetRes = await fetch(assetUrl, { cache: "force-cache" });
   if (!assetRes.ok) {
     httpuvDebugLog("sw-static-miss", {

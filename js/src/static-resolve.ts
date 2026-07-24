@@ -7,10 +7,14 @@
  */
 import { WASM_R_HOME } from "./constants";
 
-/** HTTP path for a file relative to R_HOME (no leading slash on the relative part). */
+/** HTTP path for a file relative to R_HOME, under the host prefix directory.
+ * Returned without a leading slash so callers can resolve it against the site
+ * root (SW registration scope), which may be `/` or a project Pages base.
+ */
 export function rHomeAssetHttpPath(hostPrefixDir: string, rHomeRelative: string): string {
   const hostPrefix = hostPrefixDir.replace(/^\/+|\/+$/g, "");
-  return `/${hostPrefix}${WASM_R_HOME}/${rHomeRelative}`.replace(/\/+/g, "/");
+  const rel = rHomeRelative.replace(/^\/+/, "");
+  return `${hostPrefix}${WASM_R_HOME}/${rel}`.replace(/\/+/g, "/").replace(/^\//, "");
 }
 
 const WASM_R_HOME_PREFIX = `${WASM_R_HOME}/`;

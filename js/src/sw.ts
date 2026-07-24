@@ -263,7 +263,18 @@ function mimeForAssetSuffix(suffix: string): string {
   return "application/octet-stream";
 }
 
-async function fetchRHomeAsset(rHomeRelative: string, originUrl: URL): Promise<Response | null> {
+/** Site root for static R_HOME assets. Prefer the SW registration scope so
+ * project GitHub Pages mounts (`/repo/`) resolve to `/repo/_env-wasm/...`
+ * instead of origin-absolute `/_env-wasm/...`. */
+function siteRootUrl(fallbackOrigin: URL): URL {
+  const scope = swSelf.registration?.scope;
+  if (scope) {
+    return new URL(scope);
+  }
+  return new URL("/", fallbackOrigin.origin);
+}
+
+async function fetchRHomeAsset(rHomeRelative: string, requestUrl: URL): Promise<Response | null> {
   const hostPrefixDir = tryGetHostPrefixDir();
   if (!hostPrefixDir) {
     httpuvDebugLog("sw-static-miss", {
@@ -272,7 +283,7 @@ async function fetchRHomeAsset(rHomeRelative: string, originUrl: URL): Promise<R
     });
     return null;
   }
-  const assetUrl = new URL(rHomeAssetHttpPath(hostPrefixDir, rHomeRelative), originUrl.origin);
+  const assetUrl = new URL(rHomeAssetHttpPath(hostPrefixDir, rHomeRelative), siteRootUrl(requestUrl));
   const assetRes = await fetch(assetUrl, { cache: "force-cache" });
   if (!assetRes.ok) {
     httpuvDebugLog("sw-static-miss", {
