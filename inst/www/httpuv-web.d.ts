@@ -62,6 +62,10 @@ interface HttpuvModule {
         wsType?: string;
     }) => void;
     bindInvokeROption?: (fn: InvokeROption) => void;
+    /** Shiny host mode: request an immediate host service wake. */
+    requestHostService?: () => void;
+    /** Shiny host mode: wake after delayMs (setTimeout → rAF). */
+    scheduleHostDelay?: (delayMs: number) => void;
     _swListenerInstalled?: boolean;
     [key: string]: unknown;
 }
@@ -102,6 +106,10 @@ interface HttpuvBridgeOptions {
     installSwListener?: boolean;
     /** Push inbound HTTP/WebSocket channel messages into R (R worker only). */
     pushToR?: (msg: ChannelMessage) => void;
+    /** Shiny host mode: immediate wake (NEED_SERVICE). */
+    requestHostService?: () => void;
+    /** Shiny host mode: delayed wake (SCHEDULE_DELAY). */
+    scheduleHostDelay?: (delayMs: number) => void;
 }
 /**
  * Install Module.httpuv (channel + dispatch) and optionally wire the service

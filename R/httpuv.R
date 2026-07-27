@@ -133,11 +133,7 @@ rookCall <- function(func, req, data = NULL, dataLength = -1) {
     return(on_error(compute_error))
   }
 
-  if (promises::is.promise(response)) {
-    response %...>% prepare_response %...!% on_error
-  } else {
-    tryCatch(prepare_response(response), error = on_error)
-  }
+  tryCatch(prepare_response(response), error = on_error)
 }
 
 AppWrapper <- R6Class(
@@ -223,13 +219,8 @@ AppWrapper <- R6Class(
         req$.bodyData <- NULL
       }
 
-      if (promises::is.promise(resp)) {
-        resp <- resp %...>% invokeResponseCallback(., response_callback)
-        promises::finally(resp, clean_up)
-      } else {
-        on.exit(clean_up())
-        invokeResponseCallback(resp, response_callback)
-      }
+      on.exit(clean_up())
+      invokeResponseCallback(resp, response_callback)
 
       invisible()
     },
@@ -345,32 +336,15 @@ startPipeServer <- function(name, mask, app, quiet = FALSE) {
 
 #' Process requests
 #'
-#' Runs due \code{\link[later:later]{later::later()}} callbacks. In the browser
-#' build, inbound HTTP/WebSocket I/O is pushed from JavaScript via
-#' \code{httpuv_push_*}; this function advances the R event loop (promise
-#' handlers, timers, and Shiny's \code{service()} integration).
+#' In the browser build, inbound HTTP/WebSocket I/O is pushed from JavaScript
+#' via \code{httpuv_push_*} / the Lucent worker. There is no \pkg{later}-based
+#' libuv loop to pump; this function is a no-op retained for API compatibility
+#' with Shiny's \code{service()} integration.
 #'
-#' @param timeoutMs Approximate number of milliseconds to run before returning.
-#'   If \code{0} or \code{Inf}, continually process until \code{\link{interrupt}()}
-#'   is called. If \code{NA}, performs a single non-blocking tick
-#'   (\code{later::run_now(0, all = FALSE)}).
+#' @param timeoutMs Ignored in the browser build.
 #' @export
 service <- function(timeoutMs = ifelse(interactive(), 100, 1000)) {
-  # Always use all = FALSE so the host event loop can interleave housekeeping
-  # between httpuv-related callbacks (see r-httpuv-libuv #176).
-  if (is.na(timeoutMs)) {
-    run_now(0, all = FALSE)
-  } else if (timeoutMs == 0 || timeoutMs == Inf) {
-    .globals$paused <- FALSE
-    check_time <- if (interactive()) 0.1 else Inf
-    while (!.globals$paused) {
-      run_now(check_time, all = FALSE)
-    }
-  } else {
-    run_now(timeoutMs / 1000, all = FALSE)
-  }
-
-  TRUE
+  invisible(TRUE)
 }
 
 #' @export

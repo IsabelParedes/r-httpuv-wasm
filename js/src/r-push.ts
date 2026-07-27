@@ -54,11 +54,9 @@ export function channelMessageToRExpr(msg: ChannelMessage): string {
       };
       const msgJson = jsonForR(payload);
 
-      // Static assets: handle synchronously in evalR. Reading from the VFS is
-      // fast; scheduling on later competes with serviceNonBlocking and often
-      // never fires before the SW timeout.
-      if (isLikelyStaticAsset(msg.url ?? "")) {
-        return `local({
+      // Always synchronous in the WASM host: later::later never reliably fires
+      // from Chromium dedicated workers, which left the SW waiting until 503.
+      return `local({
   msg <- jsonlite::fromJSON(${msgJson}, simplifyVector=FALSE)
   wrapper <- get("active_app_wrapper", envir=httpuv:::.globals)
   if (is.null(wrapper)) {
@@ -77,38 +75,12 @@ export function channelMessageToRExpr(msg: ChannelMessage): string {
   }
   invisible(TRUE)
 })`;
-      }
-
-      // Dynamic HTML: schedule on later (never block evalR on a full render).
-      return `local({
-  msg <- jsonlite::fromJSON(${msgJson}, simplifyVector=FALSE)
-  wrapper <- get("active_app_wrapper", envir=httpuv:::.globals)
-  later::later(function() {
-    if (is.null(wrapper)) {
-      if (!is.null(msg$uuid)) {
-        httpuv:::httpuv_write_tcp_response(
-          msg$uuid,
-          list(
-            status = 503L,
-            headers = list(\`Content-Type\` = "text/plain"),
-            body = "httpuv: no server running"
-          )
-        )
-      }
-    } else {
-      httpuv:::httpuv_handle_http_request(wrapper, msg)
-    }
-  }, delay = 0)
-  invisible(TRUE)
-})`;
     }
 
     case CHANNEL.WS_OPEN: {
       const reqPart = msg.req
         ? `jsonlite::fromJSON(${jsonForR(serializeReqForR(msg.req as Record<string, unknown>))}, simplifyVector=FALSE)`
         : "NULL";
-      // WASM: handle synchronously - later callbacks compete with suspended
-      // serviceNonBlocking and session HTTP returns 204 before they run.
       return `local({
   wrapper <- get("active_app_wrapper", envir=httpuv:::.globals)
   if (!is.null(wrapper)) {
@@ -121,9 +93,7 @@ export function channelMessageToRExpr(msg: ChannelMessage): string {
 
     case CHANNEL.WS_MESSAGE: {
       const bytesJson = jsonForR(encodeWsPayloadBytes(msg.message, Boolean(msg.binary)));
-      // Pass raw bytes (binary=TRUE) via a JSON byte array - avoids embedding
-      // large init JSON in evalR source. Schedule on later so Shiny can flush.
-      return `later::later(function() {
+      return `local({
   wrapper <- get("active_app_wrapper", envir=httpuv:::.globals)
   if (!is.null(wrapper)) {
     msg_raw <- httpuv:::httpuv_bytes_to_raw(
@@ -131,8 +101,8 @@ export function channelMessageToRExpr(msg: ChannelMessage): string {
     )
     wrapper$onWSMessage(${jsonForR(msg.handle)}, TRUE, msg_raw)
   }
-}, delay = 0)
-invisible(TRUE)`;
+  invisible(TRUE)
+})`;
     }
 
     case CHANNEL.WS_CLOSE:

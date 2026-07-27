@@ -78,11 +78,24 @@ let hostClientId: string | null = null;
 
 let rwasmHost: Remote<RHostApi> | null = null;
 
-let rwasmHostReadyResolve: (() => void) | null = null;
+interface RwasmHostReady {
+  promise: Promise<Remote<RHostApi>>;
+  resolve: (host: Remote<RHostApi>) => void;
+  reject: (err: Error) => void;
+}
 
-let rwasmHostReady: Promise<void> = new Promise((resolve) => {
-  rwasmHostReadyResolve = resolve;
-});
+function createRwasmHostReady(): RwasmHostReady {
+  let resolve!: (host: Remote<RHostApi>) => void;
+  let reject!: (err: Error) => void;
+  const promise = new Promise<Remote<RHostApi>>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Pending waiters until Comlink connects or the handshake is reset/fails. */
+let rwasmHostReady: RwasmHostReady = createRwasmHostReady();
 
 interface WsPushMsg {
   wsType?: string;
@@ -131,44 +144,30 @@ async function connectSwToWorker(port: MessagePort): Promise<void> {
     console.info("[httpuv-sw] Comlink: unified session connected");
   } catch (err) {
     console.error("[httpuv-sw] Comlink unified setup failed", err);
-    resetRwasmHostWaiter();
+    const message = err instanceof Error ? err.message : String(err);
+    resetRwasmHostWaiter(new Error(`R worker Comlink setup failed: ${message}`));
   }
 }
 
 function markRwasmHostReady(): void {
-  if (rwasmHostReadyResolve) {
-    rwasmHostReadyResolve();
-    rwasmHostReadyResolve = null;
+  if (!rwasmHost) {
+    return;
   }
+  rwasmHostReady.resolve(rwasmHost);
 }
 
-function resetRwasmHostWaiter(): void {
+function resetRwasmHostWaiter(reason?: Error): void {
+  const previous = rwasmHostReady;
   rwasmHost = null;
-  rwasmHostReady = new Promise((resolve) => {
-    rwasmHostReadyResolve = resolve;
-  });
+  rwasmHostReady = createRwasmHostReady();
+  previous.reject(reason ?? new Error("R worker Comlink not ready"));
 }
 
-async function waitForRwasmHost(timeoutMs = REQUEST_TIMEOUT_MS): Promise<Remote<RHostApi>> {
+async function waitForRwasmHost(): Promise<Remote<RHostApi>> {
   if (rwasmHost) {
     return rwasmHost;
   }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("R worker Comlink not ready")), timeoutMs);
-  });
-
-  try {
-    await Promise.race([rwasmHostReady, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (!rwasmHost) {
-    throw new Error("R worker Comlink not ready");
-  }
-  return rwasmHost;
+  return rwasmHostReady.promise;
 }
 
 /** Ask the host page to re-handshake Comlink MessagePorts. */
@@ -621,7 +620,7 @@ async function handleShinyFetch(event: FetchEvent): Promise<Response> {
   if (!rwasmHost) {
     void requestComlinkFromHost();
     try {
-      await waitForRwasmHost(60_000);
+      await waitForRwasmHost();
     } catch (err) {
       console.error("[httpuv-sw] R worker not ready for", request.url, err);
       return new Response("Shiny R worker is not ready", {
@@ -807,6 +806,7 @@ swSelf.addEventListener("message", (event) => {
           console.warn("[httpuv-sw] R worker stop failed", err);
         });
       }
+      resetRwasmHostWaiter(new Error("httpuv stopped"));
       break;
     }
 

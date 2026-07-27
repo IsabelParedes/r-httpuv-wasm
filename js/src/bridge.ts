@@ -578,6 +578,10 @@ export interface HttpuvBridgeOptions {
   installSwListener?: boolean;
   /** Push inbound HTTP/WebSocket channel messages into R (R worker only). */
   pushToR?: (msg: ChannelMessage) => void;
+  /** Shiny host mode: immediate wake (NEED_SERVICE). */
+  requestHostService?: () => void;
+  /** Shiny host mode: delayed wake (SCHEDULE_DELAY). */
+  scheduleHostDelay?: (delayMs: number) => void;
 }
 
 /**
@@ -606,6 +610,13 @@ export function installHttpuvBridge(options: HttpuvBridgeOptions = {}): HttpuvMo
   httpuv.injectShinySocketBootstrap = injectShinySocketBootstrap;
   httpuv.shinySocketScriptUrl = shinySocketScriptUrl;
   httpuv.shinyPrefix = getShinyPrefix();
+
+  if (options.requestHostService) {
+    httpuv.requestHostService = options.requestHostService;
+  }
+  if (options.scheduleHostDelay) {
+    httpuv.scheduleHostDelay = options.scheduleHostDelay;
+  }
 
   /** Push a message to a virtual socket recv waiter (used by R via channel.write). */
   httpuv.pushWsMessage = (handle, message, opts = {}) => {

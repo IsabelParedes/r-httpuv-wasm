@@ -652,6 +652,12 @@ function installHttpuvBridge(options = {}) {
   httpuv.injectShinySocketBootstrap = injectShinySocketBootstrap;
   httpuv.shinySocketScriptUrl = shinySocketScriptUrl;
   httpuv.shinyPrefix = getShinyPrefix();
+  if (options.requestHostService) {
+    httpuv.requestHostService = options.requestHostService;
+  }
+  if (options.scheduleHostDelay) {
+    httpuv.scheduleHostDelay = options.scheduleHostDelay;
+  }
   httpuv.pushWsMessage = (handle, message, opts = {}) => {
     getChannel().write({
       type: CHANNEL.WS_RESPONSE,
@@ -725,8 +731,7 @@ function channelMessageToRExpr(msg) {
         body: msg.body ?? null
       };
       const msgJson = jsonForR(payload);
-      if (isLikelyStaticAsset(msg.url ?? "")) {
-        return `local({
+      return `local({
   msg <- jsonlite::fromJSON(${msgJson}, simplifyVector=FALSE)
   wrapper <- get("active_app_wrapper", envir=httpuv:::.globals)
   if (is.null(wrapper)) {
@@ -745,28 +750,6 @@ function channelMessageToRExpr(msg) {
   }
   invisible(TRUE)
 })`;
-      }
-      return `local({
-  msg <- jsonlite::fromJSON(${msgJson}, simplifyVector=FALSE)
-  wrapper <- get("active_app_wrapper", envir=httpuv:::.globals)
-  later::later(function() {
-    if (is.null(wrapper)) {
-      if (!is.null(msg$uuid)) {
-        httpuv:::httpuv_write_tcp_response(
-          msg$uuid,
-          list(
-            status = 503L,
-            headers = list(\`Content-Type\` = "text/plain"),
-            body = "httpuv: no server running"
-          )
-        )
-      }
-    } else {
-      httpuv:::httpuv_handle_http_request(wrapper, msg)
-    }
-  }, delay = 0)
-  invisible(TRUE)
-})`;
     }
     case CHANNEL.WS_OPEN: {
       const reqPart = msg.req ? `jsonlite::fromJSON(${jsonForR(serializeReqForR(msg.req))}, simplifyVector=FALSE)` : "NULL";
@@ -781,7 +764,7 @@ function channelMessageToRExpr(msg) {
     }
     case CHANNEL.WS_MESSAGE: {
       const bytesJson = jsonForR(encodeWsPayloadBytes(msg.message, Boolean(msg.binary)));
-      return `later::later(function() {
+      return `local({
   wrapper <- get("active_app_wrapper", envir=httpuv:::.globals)
   if (!is.null(wrapper)) {
     msg_raw <- httpuv:::httpuv_bytes_to_raw(
@@ -789,8 +772,8 @@ function channelMessageToRExpr(msg) {
     )
     wrapper$onWSMessage(${jsonForR(msg.handle)}, TRUE, msg_raw)
   }
-}, delay = 0)
-invisible(TRUE)`;
+  invisible(TRUE)
+})`;
     }
     case CHANNEL.WS_CLOSE:
       return `local({

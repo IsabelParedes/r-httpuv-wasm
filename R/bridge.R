@@ -426,18 +426,21 @@ httpuv_invoke_host_option <- function(option_name, ...) {
   TRUE
 }
 
-#' Schedule work on the global later loop (WASM: runs after the current evalR returns).
+#' Run work immediately on the WASM host (no later event loop).
+#'
+#' Historically this scheduled on \pkg{later}; the browser build must not
+#' depend on later's JS timers (unreliable in Chromium workers).
 #' @param fn Zero-argument function.
 #' @keywords internal
 httpuv_push_on_later <- function(fn) {
-  later::later(fn, delay = 0)
+  force(fn)
+  fn()
   invisible(TRUE)
 }
 
 #' Push an HTTP request from the JavaScript host.
 #'
-#' Schedules handling on the global \pkg{later} loop. The browser host yields
-#' idle time after push so the callback can run from an emscripten timer.
+#' Runs the handler immediately in the current evalR (no later event loop).
 #'
 #' @param msg A channel message list with \code{uuid}, \code{method}, \code{url},
 #'   \code{headers}, and optional \code{body}.
@@ -616,10 +619,9 @@ closeWS <- function(conn, code = 1000L, reason = "") {
 
 #' Non-blocking httpuv service tick for the WASM host.
 #'
-#' Runs \code{\link{service}(NA)}. Inbound I/O uses the JavaScript push path
-#' (\code{httpuv_push_*}); this only advances the \pkg{later} event loop.
+#' Retained for API compatibility. Inbound I/O uses the JavaScript push path
+#' (\code{httpuv_push_*}); there is no later loop to advance.
 #' @export
 httpuv_pump <- function() {
-  service(NA)
   invisible(TRUE)
 }

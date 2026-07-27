@@ -594,10 +594,16 @@ resolveSessionPrefix(new URL("/", swSelf.location.href).href);
 var shinyAppPrefix = SHINY_PREFIX;
 var hostClientId = null;
 var rwasmHost = null;
-var rwasmHostReadyResolve = null;
-var rwasmHostReady = new Promise((resolve) => {
-  rwasmHostReadyResolve = resolve;
-});
+function createRwasmHostReady() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+var rwasmHostReady = createRwasmHostReady();
 async function connectSwToWorker(port) {
   const workerHost = comlink_exports.wrap(port);
   const deliveryChannel = new MessageChannel();
@@ -614,38 +620,27 @@ async function connectSwToWorker(port) {
     console.info("[httpuv-sw] Comlink: unified session connected");
   } catch (err) {
     console.error("[httpuv-sw] Comlink unified setup failed", err);
-    resetRwasmHostWaiter();
+    const message = err instanceof Error ? err.message : String(err);
+    resetRwasmHostWaiter(new Error(`R worker Comlink setup failed: ${message}`));
   }
 }
 function markRwasmHostReady() {
-  if (rwasmHostReadyResolve) {
-    rwasmHostReadyResolve();
-    rwasmHostReadyResolve = null;
+  if (!rwasmHost) {
+    return;
   }
+  rwasmHostReady.resolve(rwasmHost);
 }
-function resetRwasmHostWaiter() {
+function resetRwasmHostWaiter(reason) {
+  const previous = rwasmHostReady;
   rwasmHost = null;
-  rwasmHostReady = new Promise((resolve) => {
-    rwasmHostReadyResolve = resolve;
-  });
+  rwasmHostReady = createRwasmHostReady();
+  previous.reject(reason ?? new Error("R worker Comlink not ready"));
 }
-async function waitForRwasmHost(timeoutMs = REQUEST_TIMEOUT_MS) {
+async function waitForRwasmHost() {
   if (rwasmHost) {
     return rwasmHost;
   }
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error("R worker Comlink not ready")), timeoutMs);
-  });
-  try {
-    await Promise.race([rwasmHostReady, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!rwasmHost) {
-    throw new Error("R worker Comlink not ready");
-  }
-  return rwasmHost;
+  return rwasmHostReady.promise;
 }
 async function requestComlinkFromHost() {
   const client = await getHostClient();
@@ -693,6 +688,24 @@ function setShinyResourcePaths(paths) {
       shinyResourcePaths.set(prefix, dir);
     }
   }
+  fetch("http://127.0.0.1:7690/ingest/1effc28b-6659-45ef-be39-62c7229aac8e", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f823b1" },
+    body: JSON.stringify({
+      sessionId: "f823b1",
+      hypothesisId: "A",
+      location: "sw.ts:setShinyResourcePaths",
+      message: "resource paths updated",
+      data: {
+        count: shinyResourcePaths.size,
+        hasShinyPlots: shinyResourcePaths.has("shiny-plots"),
+        shinyPlotsDir: shinyResourcePaths.get("shiny-plots") ?? null,
+        keys: [...shinyResourcePaths.keys()]
+      },
+      timestamp: Date.now()
+    })
+  }).catch(() => {
+  });
   if (shinyResourcePaths.size > 0) {
     console.info(
       "[httpuv-sw] registered",
@@ -789,6 +802,27 @@ async function tryServeShinyStaticAsset(request) {
     }
   }
   const localDir = shinyResourcePaths.get(prefix);
+  if (prefix === "shiny-plots" || suffix.endsWith(".png")) {
+    fetch("http://127.0.0.1:7690/ingest/1effc28b-6659-45ef-be39-62c7229aac8e", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f823b1" },
+      body: JSON.stringify({
+        sessionId: "f823b1",
+        hypothesisId: "A",
+        location: "sw.ts:tryServeShinyStaticAsset",
+        message: "plot-ish static request",
+        data: {
+          prefix,
+          suffix,
+          pathname: url.pathname,
+          localDir: localDir ?? null,
+          hasMap: shinyResourcePaths.has(prefix)
+        },
+        timestamp: Date.now()
+      })
+    }).catch(() => {
+    });
+  }
   if (localDir) {
     if (localDir.startsWith(`${WASM_R_HOME}/`)) {
       const rHomeRelative = rHomePathFromVfsDir(localDir, suffix);
@@ -805,6 +839,21 @@ async function tryServeShinyStaticAsset(request) {
         const body = await host.readVfsFile(localDir, suffix);
         if (body) {
           httpuvDebugLog("sw-static-hit", { prefix, suffix, source: "vfs", path: localDir });
+          if (prefix === "shiny-plots" || suffix.endsWith(".png")) {
+            fetch("http://127.0.0.1:7690/ingest/1effc28b-6659-45ef-be39-62c7229aac8e", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f823b1" },
+              body: JSON.stringify({
+                sessionId: "f823b1",
+                hypothesisId: "B",
+                location: "sw.ts:tryServeShinyStaticAsset",
+                message: "vfs static hit",
+                data: { prefix, suffix, localDir, byteLength: body.byteLength },
+                timestamp: Date.now()
+              })
+            }).catch(() => {
+            });
+          }
           const headers = new Headers({
             "Content-Type": mimeForAssetSuffix(suffix),
             "X-Httpuv-Static": "vfs"
@@ -814,8 +863,36 @@ async function tryServeShinyStaticAsset(request) {
           }
           return new Response(body, { status: 200, headers });
         }
+        if (prefix === "shiny-plots" || suffix.endsWith(".png")) {
+          fetch("http://127.0.0.1:7690/ingest/1effc28b-6659-45ef-be39-62c7229aac8e", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f823b1" },
+            body: JSON.stringify({
+              sessionId: "f823b1",
+              hypothesisId: "B",
+              location: "sw.ts:tryServeShinyStaticAsset",
+              message: "vfs read returned null",
+              data: { prefix, suffix, localDir },
+              timestamp: Date.now()
+            })
+          }).catch(() => {
+          });
+        }
       } catch (err) {
         httpuvDebugLog("sw-vfs-read-fail", { prefix, suffix, vfsDir: localDir, err: String(err) });
+        fetch("http://127.0.0.1:7690/ingest/1effc28b-6659-45ef-be39-62c7229aac8e", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "f823b1" },
+          body: JSON.stringify({
+            sessionId: "f823b1",
+            hypothesisId: "B",
+            location: "sw.ts:tryServeShinyStaticAsset",
+            message: "vfs read threw",
+            data: { prefix, suffix, localDir, err: String(err) },
+            timestamp: Date.now()
+          })
+        }).catch(() => {
+        });
       }
     }
   }
@@ -1035,7 +1112,7 @@ async function handleShinyFetch(event) {
   if (!rwasmHost) {
     void requestComlinkFromHost();
     try {
-      await waitForRwasmHost(6e4);
+      await waitForRwasmHost();
     } catch (err) {
       console.error("[httpuv-sw] R worker not ready for", request.url, err);
       return new Response("Shiny R worker is not ready", {
@@ -1189,6 +1266,7 @@ swSelf.addEventListener("message", (event) => {
           console.warn("[httpuv-sw] R worker stop failed", err);
         });
       }
+      resetRwasmHostWaiter(new Error("httpuv stopped"));
       break;
     }
   }

@@ -10,8 +10,6 @@
 #' @keywords package
 #' @useDynLib httpuv, .registration = TRUE
 #' @importFrom R6 R6Class
-#' @importFrom promises promise then finally is.promise %...>% %...!%
 #' @importFrom stats runif
 #' @importFrom jsonlite fromJSON toJSON
-#' @importFrom later run_now
 "_PACKAGE"

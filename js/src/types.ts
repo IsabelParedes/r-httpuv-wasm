@@ -71,6 +71,10 @@ export interface HttpuvModule {
     opts?: { binary?: boolean; wsType?: string },
   ) => void;
   bindInvokeROption?: (fn: InvokeROption) => void;
+  /** Shiny host mode: request an immediate host service wake. */
+  requestHostService?: () => void;
+  /** Shiny host mode: wake after delayMs (setTimeout → rAF). */
+  scheduleHostDelay?: (delayMs: number) => void;
   _swListenerInstalled?: boolean;
   [key: string]: unknown;
 }
