@@ -642,7 +642,7 @@ export function installHttpuvBridge(options: HttpuvBridgeOptions = {}): HttpuvMo
     httpuv._swListenerInstalled = true;
   }
 
-  console.info("[httpuv-bridge] installed");
+  httpuvDebugLog("bridge-installed");
   return httpuv;
 }
 

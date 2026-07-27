@@ -141,7 +141,7 @@ async function connectSwToWorker(port: MessagePort): Promise<void> {
     );
     rwasmHost = workerHost;
     markRwasmHostReady();
-    console.info("[httpuv-sw] Comlink: unified session connected");
+    httpuvDebugLog("sw-comlink-connected");
   } catch (err) {
     console.error("[httpuv-sw] Comlink unified setup failed", err);
     const message = err instanceof Error ? err.message : String(err);
@@ -231,12 +231,10 @@ function setShinyResourcePaths(paths: Record<string, string>): void {
     }
   }
   if (shinyResourcePaths.size > 0) {
-    console.info(
-      "[httpuv-sw] registered",
-      shinyResourcePaths.size,
-      "Shiny resource path(s):",
-      [...shinyResourcePaths.keys()].join(", "),
-    );
+    httpuvDebugLog("sw-resource-paths", {
+      count: shinyResourcePaths.size,
+      keys: [...shinyResourcePaths.keys()],
+    });
   }
 }
 
@@ -382,12 +380,12 @@ async function tryServeShinyStaticAsset(request: Request): Promise<Response | nu
 }
 
 swSelf.addEventListener("install", (event) => {
-  console.info("[httpuv-sw] installing, shiny prefix:", SHINY_PREFIX);
+  httpuvDebugLog("sw-install", { shinyPrefix: SHINY_PREFIX });
   event.waitUntil(swSelf.skipWaiting());
 });
 
 swSelf.addEventListener("activate", (event) => {
-  console.info("[httpuv-sw] activated, shiny prefix:", SHINY_PREFIX);
+  httpuvDebugLog("sw-activate", { shinyPrefix: SHINY_PREFIX });
   resetRwasmHostWaiter();
   event.waitUntil(swSelf.clients.claim());
 });
@@ -407,7 +405,7 @@ function waitForHttpResponse(uuid: string, url: string, method: string): Promise
 function maybeCacheAppDocument(resp: PendingResponse, url: string, method: string): void {
   if (url && method === "GET" && isAppDocumentRequest(url) && resp.status === 200) {
     cachedAppDocument = clonePendingResponse(resp);
-    console.info("[httpuv-sw] cached app document", url);
+    httpuvDebugLog("sw-app-cache-store", { url });
   }
 }
 
@@ -553,7 +551,7 @@ function handleHostOutboundMessage(msg: HostOutbound): void {
       httpuvDebugLog("sw-response", { uuid: msg.uuid, status: msg.status });
       const pending = msg.uuid ? pendingHttp.get(msg.uuid) : undefined;
       if (!pending || !msg.uuid) {
-        console.warn("[httpuv-sw] No pending request for", msg.uuid);
+        httpuvDebugLog("sw-response-orphan", { uuid: msg.uuid });
         return;
       }
       clearTimeout(pending.timer);
@@ -569,7 +567,7 @@ function handleHostOutboundMessage(msg: HostOutbound): void {
     }
     case MSG.WS_PUSH: {
       if (!msg.handle) {
-        console.warn("[httpuv-sw] WS_PUSH missing handle");
+        httpuvDebugLog("sw-ws-push-missing-handle");
         return;
       }
       httpuvDebugLog("sw-ws-push-inbound", {
@@ -581,7 +579,7 @@ function handleHostOutboundMessage(msg: HostOutbound): void {
       break;
     }
     default:
-      console.warn("[httpuv-sw] Ignoring unknown host push message", msg.type);
+      httpuvDebugLog("sw-unknown-push", { type: msg.type });
   }
 }
 
@@ -736,7 +734,7 @@ swSelf.addEventListener("message", (event) => {
       const source = event.source;
       if (source && "id" in source) {
         hostClientId = source.id;
-        console.info("[httpuv-sw] Registered host client", hostClientId);
+        httpuvDebugLog("sw-host-registered", { hostClientId });
       }
       break;
     }
