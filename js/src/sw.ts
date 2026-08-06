@@ -156,6 +156,11 @@ function markRwasmHostReady(): void {
   rwasmHostReady.resolve(rwasmHost);
 }
 
+/**
+ * Hard reset: drop the host and reject anyone waiting (activate / STOP / fatal
+ * Comlink failure). Callers that need a reconnect should use
+ * {@link rollRwasmHostWaiter} instead so in-flight fetches keep waiting.
+ */
 function resetRwasmHostWaiter(reason?: Error): void {
   const previous = rwasmHostReady;
   rwasmHost = null;
@@ -163,11 +168,45 @@ function resetRwasmHostWaiter(reason?: Error): void {
   previous.reject(reason ?? new Error("R worker Comlink not ready"));
 }
 
+/**
+ * Soft reset for PORT_HANDOFF: clear the live host and open a new waiter, but
+ * forward settlement to the previous promise so warmup/fetch waiters are not
+ * rejected mid-handshake (that produced instant HTTP 503 "not ready").
+ */
+function rollRwasmHostWaiter(): void {
+  const previous = rwasmHostReady;
+  rwasmHost = null;
+  rwasmHostReady = createRwasmHostReady();
+  void rwasmHostReady.promise.then(
+    (host) => {
+      previous.resolve(host);
+    },
+    (err: unknown) => {
+      previous.reject(err instanceof Error ? err : new Error(String(err)));
+    },
+  );
+}
+
 async function waitForRwasmHost(): Promise<Remote<RHostApi>> {
-  if (rwasmHost) {
-    return rwasmHost;
+  // Retry across soft handoffs: a PORT_HANDOFF may replace rwasmHostReady while
+  // we are awaiting; permanent rejects (STOP / setup failure) still propagate.
+  for (;;) {
+    if (rwasmHost) {
+      return rwasmHost;
+    }
+    const ready = rwasmHostReady;
+    try {
+      return await ready.promise;
+    } catch (err) {
+      if (rwasmHost) {
+        return rwasmHost;
+      }
+      if (rwasmHostReady !== ready) {
+        continue;
+      }
+      throw err;
+    }
   }
-  return rwasmHostReady.promise;
 }
 
 /** Ask the host page to re-handshake Comlink MessagePorts. */
@@ -714,7 +753,8 @@ swSelf.addEventListener("message", (event) => {
   if (msg.type === COMLINK.PORT_HANDOFF && event.ports[0]) {
     const port = event.ports[0];
     port.start();
-    resetRwasmHostWaiter();
+    // Soft roll: keep in-flight waitForRwasmHost() waiters alive across handoff.
+    rollRwasmHostWaiter();
     void connectSwToWorker(port);
     return;
   }

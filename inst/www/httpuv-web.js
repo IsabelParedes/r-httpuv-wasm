@@ -677,7 +677,7 @@ function installHttpuvBridge(options = {}) {
     installServiceWorkerListener();
     httpuv._swListenerInstalled = true;
   }
-  console.info("[httpuv-bridge] installed");
+  httpuvDebugLog("bridge-installed");
   return httpuv;
 }
 function setInvokeROption(fn) {

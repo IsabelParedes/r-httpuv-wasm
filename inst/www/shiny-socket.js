@@ -207,7 +207,7 @@ function installVirtualShinySocket() {
   };
   apply();
   document.addEventListener("DOMContentLoaded", apply, { once: true });
-  console.info("[shiny-socket] VirtualShinySocket installed");
+  httpuvDebugLog("shiny-socket-installed");
 }
 installVirtualShinySocket();
 
