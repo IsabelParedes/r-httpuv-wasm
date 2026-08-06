@@ -10,9 +10,6 @@ export const WASM_R_HOME = "/lib/R";
 /** Max time the service worker waits for the R worker to answer a request. */
 export const REQUEST_TIMEOUT_MS = 180_000;
 
-/** Max time a session recv long-poll waits before returning 204. */
-export const SESSION_RECV_TIMEOUT_MS = 25_000;
-
 /** Message types exchanged between the service worker and the main page. */
 export const MSG = {
   REGISTER_HOST: "httpuv_register_host",
@@ -28,6 +25,12 @@ export const MSG = {
   REGISTER_RESOURCE_PATHS: "httpuv_register_resource_paths",
   /** SW -> host: Comlink to the R worker was lost (e.g. after SW update). */
   REQUEST_COMLINK: "httpuv_request_comlink",
+  /** Iframe → SW: transfer a MessagePort for session WS push delivery. */
+  REGISTER_SESSION: "httpuv_register_session",
+  /** SW → iframe (on session port): registration accepted. */
+  SESSION_ACK: "httpuv_session_ack",
+  /** SW → iframe client: session MessagePort was lost (e.g. SW idle restart); re-REGISTER_SESSION. */
+  REQUEST_SESSION_PORT: "httpuv_request_session_port",
 } as const;
 
 /** Bypass SW app-document cache (warmup must hit R so deps register). */

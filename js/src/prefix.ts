@@ -92,7 +92,7 @@ export function parseSessionAction(urlString: string, prefix: string): SessionAc
   };
 }
 
-/** Session HTTP actions handled by the R worker (not SW long-poll recv). */
+/** Session HTTP actions handled by the R worker (not SW MessagePort delivery). */
 export function isSessionHttpRequest(urlString: string, prefix?: string): boolean {
   if (prefix) {
     const session = parseSessionAction(urlString, prefix);

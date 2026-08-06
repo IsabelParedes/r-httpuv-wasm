@@ -4,7 +4,6 @@ import {
   COMLINK,
   MSG,
   REQUEST_TIMEOUT_MS,
-  SESSION_RECV_TIMEOUT_MS,
   WASM_R_HOME,
   WARMUP_REQUEST_HEADER,
   WS_FRAME,
@@ -111,11 +110,6 @@ interface HttpWaiter {
   method: string;
 }
 
-interface RecvWaiter {
-  resolve: (response: Response) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
 interface HostOutbound {
   type: string;
   uuid?: string;
@@ -209,17 +203,38 @@ async function waitForRwasmHost(): Promise<Remote<RHostApi>> {
   }
 }
 
-/** Ask the host page to re-handshake Comlink MessagePorts. */
+/** Ask the Lucent host page to re-handshake Comlink MessagePorts. */
 async function requestComlinkFromHost(): Promise<void> {
-  const client = await getHostClient();
-  client?.postMessage({ type: MSG.REQUEST_COMLINK });
+  // Broadcast to every window client. After an idle SW restart hostClientId is
+  // gone, and Chromium often lists the focused /shiny/ iframe first — posting
+  // only to clients[0] never reaches Lucent. The iframe ignores this message.
+  const clients = await swSelf.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  httpuvDebugLog("sw-request-comlink", {
+    clients: clients.length,
+    hostClientId,
+    urls: clients.map((c) => c.url),
+  });
+  for (const client of clients) {
+    client.postMessage({ type: MSG.REQUEST_COMLINK });
+  }
 }
 
 const pendingHttp = new Map<string, HttpWaiter>();
 
-const pendingRecv = new Map<string, RecvWaiter[]>();
+/** Per-session MessagePort for SW → iframe WS push delivery. */
+const sessionPorts = new Map<string, MessagePort>();
 
+/** Iframe clientId that owns each session (for REQUEST_SESSION_PORT after SW idle). */
+const sessionClientIds = new Map<string, string>();
+
+/** Frames that arrived before REGISTER_SESSION (mirrors old recv queue). */
 const queuedWsPush = new Map<string, WsPushMsg[]>();
+
+/** Avoid spamming the client with re-register requests while one is in flight. */
+const sessionPortReregisterPending = new Set<string>();
 
 /** Cached GET /shiny/ document so warmup and iframe do not each trigger a full R render. */
 let cachedAppDocument: PendingResponse | null = null;
@@ -426,7 +441,13 @@ swSelf.addEventListener("install", (event) => {
 swSelf.addEventListener("activate", (event) => {
   httpuvDebugLog("sw-activate", { shinyPrefix: SHINY_PREFIX });
   resetRwasmHostWaiter();
-  event.waitUntil(swSelf.clients.claim());
+  event.waitUntil(
+    (async () => {
+      await swSelf.clients.claim();
+      // SW memory (hostClientId, Comlink) was wiped — ask Lucent to re-handshake.
+      await requestComlinkFromHost();
+    })(),
+  );
 });
 
 function waitForHttpResponse(uuid: string, url: string, method: string): Promise<PendingResponse> {
@@ -477,40 +498,105 @@ function messageBodyLength(message: unknown): number {
   return 0;
 }
 
-function deliverWsPush(handle: string, msg: WsPushMsg): void {
+function cloneWsMessage(message: unknown, binary: boolean): unknown {
+  if (message == null) {
+    return null;
+  }
+  if (!binary) {
+    if (typeof message === "string") {
+      return message;
+    }
+    if (message instanceof ArrayBuffer) {
+      return new TextDecoder().decode(message);
+    }
+    if (ArrayBuffer.isView(message)) {
+      return new TextDecoder().decode(message);
+    }
+    return String(message);
+  }
+  // Always copy binary payloads. The buffer may already have been transferred
+  // through Comlink; posting with a transfer list (or a detached buffer) throws
+  // DataCloneError and used to tear down the session port.
+  if (message instanceof ArrayBuffer) {
+    return message.slice(0);
+  }
+  if (ArrayBuffer.isView(message)) {
+    return message.buffer.slice(message.byteOffset, message.byteOffset + message.byteLength);
+  }
+  if (Array.isArray(message)) {
+    return new Uint8Array(message as number[]).buffer;
+  }
+  return message;
+}
+
+function postWsPushToPort(port: MessagePort, handle: string, msg: WsPushMsg): boolean {
+  const binary = Boolean(msg.binary);
+  const payload = {
+    type: MSG.WS_PUSH,
+    handle,
+    wsType: msg.wsType ?? WS_FRAME.SEND,
+    binary,
+    message: cloneWsMessage(msg.message ?? null, binary),
+  };
+  try {
+    // Structured clone only — never transfer. Transferring a buffer that Comlink
+    // already moved throws and would stall the session.
+    port.postMessage(payload);
+    return true;
+  } catch (err) {
+    console.warn("[httpuv-sw] session port postMessage failed", err);
+    return false;
+  }
+}
+
+function clearSessionPort(handle: string): void {
   const key = normalizeSessionHandle(handle);
-  const queue = pendingRecv.get(key);
-  httpuvDebugLog("sw-ws-push", {
-    handle: key,
-    wsType: msg.wsType,
-    messageLen: messageBodyLength(msg.message),
-    recvWaiters: queue?.length ?? 0,
-    queuedBefore: queuedWsPush.get(key)?.length ?? 0,
-  });
-  if (queue && queue.length > 0) {
-    const waiter = queue.shift();
-    if (!waiter) {
-      return;
-    }
-    clearTimeout(waiter.timer);
-    if (queue.length === 0) {
-      pendingRecv.delete(key);
-    }
-    const headers = new Headers();
-    headers.set("X-Httpuv-WS-Type", msg.wsType ?? WS_FRAME.SEND);
-    headers.set("X-Httpuv-WS-Binary", msg.binary ? "1" : "0");
-    if (!msg.binary) {
-      headers.set("Content-Type", "text/plain; charset=UTF-8");
-    }
-    waiter.resolve(
-      new Response((msg.message ?? null) as BodyInit | null, {
-        status: 200,
-        headers,
-      }),
-    );
+  const port = sessionPorts.get(key);
+  if (!port) {
     return;
   }
+  sessionPorts.delete(key);
+  try {
+    port.close();
+  } catch {
+    // ignore
+  }
+}
 
+/** Ask the iframe to transfer a fresh MessagePort (SW may have been killed while idle). */
+function requestSessionPortReregister(handle: string): void {
+  const key = normalizeSessionHandle(handle);
+  if (!key || sessionPortReregisterPending.has(key)) {
+    return;
+  }
+  const clientId = sessionClientIds.get(key);
+  if (!clientId) {
+    httpuvDebugLog("sw-session-reregister-no-client", { handle: key });
+    return;
+  }
+  sessionPortReregisterPending.add(key);
+  void swSelf.clients
+    .get(clientId)
+    .then((client) => {
+      if (!client) {
+        httpuvDebugLog("sw-session-reregister-client-gone", { handle: key, clientId });
+        return;
+      }
+      httpuvDebugLog("sw-session-reregister", { handle: key, clientId });
+      client.postMessage({ type: MSG.REQUEST_SESSION_PORT, handle: key });
+    })
+    .catch((err: unknown) => {
+      console.warn("[httpuv-sw] REQUEST_SESSION_PORT failed", err);
+    })
+    .finally(() => {
+      // Allow another nudge after a beat if the client never re-registered.
+      setTimeout(() => {
+        sessionPortReregisterPending.delete(key);
+      }, 2_000);
+    });
+}
+
+function queueWsPush(key: string, msg: WsPushMsg): void {
   const existing = queuedWsPush.get(key);
   if (existing) {
     existing.push(msg);
@@ -519,55 +605,95 @@ function deliverWsPush(handle: string, msg: WsPushMsg): void {
   }
 }
 
-async function handleSessionRecv(event: FetchEvent): Promise<Response> {
-  const url = new URL(event.request.url);
-  const handle = normalizeSessionHandle(url.searchParams.get("handle"));
-  httpuvDebugLog("sw-recv", { handle, url: url.href });
-  if (!handle) {
-    return new Response("missing handle query parameter", {
-      status: 400,
-      headers: { "Content-Type": "text/plain" },
-    });
+function registerSessionPort(handle: string, port: MessagePort, clientId?: string): void {
+  const key = normalizeSessionHandle(handle);
+  clearSessionPort(key);
+  if (clientId) {
+    sessionClientIds.set(key, clientId);
   }
+  sessionPortReregisterPending.delete(key);
+  port.start();
+  sessionPorts.set(key, port);
+  httpuvDebugLog("sw-session-registered", { handle: key, clientId: sessionClientIds.get(key) });
 
-  const queued = queuedWsPush.get(handle);
+  const queued = queuedWsPush.get(key);
   if (queued && queued.length > 0) {
-    const msg = queued.shift();
-    if (queued.length === 0) {
-      queuedWsPush.delete(handle);
+    queuedWsPush.delete(key);
+    while (queued.length > 0) {
+      const next = queued[0]!;
+      if (!postWsPushToPort(port, key, next)) {
+        // Leave remaining frames queued; port stays registered for later pushes.
+        queuedWsPush.set(key, queued);
+        break;
+      }
+      queued.shift();
     }
-    const headers = new Headers();
-    headers.set("X-Httpuv-WS-Type", msg?.wsType ?? WS_FRAME.SEND);
-    headers.set("X-Httpuv-WS-Binary", msg?.binary ? "1" : "0");
-    if (!msg?.binary) {
-      headers.set("Content-Type", "text/plain; charset=UTF-8");
-    }
-    return new Response((msg?.message ?? null) as BodyInit | null, { status: 200, headers });
   }
 
-  return new Promise<Response>((resolve) => {
-    const timer = setTimeout(() => {
-      const waiters = pendingRecv.get(handle);
-      if (!waiters) {
-        return;
-      }
-      const idx = waiters.findIndex((w) => w.timer === timer);
-      if (idx !== -1) {
-        waiters.splice(idx, 1);
-      }
-      if (waiters.length === 0) {
-        pendingRecv.delete(handle);
-      }
-      resolve(new Response(null, { status: 204 }));
-    }, SESSION_RECV_TIMEOUT_MS);
+  try {
+    port.postMessage({ type: MSG.SESSION_ACK, handle: key });
+  } catch (err) {
+    console.warn("[httpuv-sw] session ACK failed", err);
+    clearSessionPort(key);
+  }
+}
 
-    const waiters = pendingRecv.get(handle);
-    if (waiters) {
-      waiters.push({ resolve, timer });
-    } else {
-      pendingRecv.set(handle, [{ resolve, timer }]);
-    }
+function deliverWsPush(handle: string, msg: WsPushMsg): void {
+  const key = normalizeSessionHandle(handle);
+  const port = sessionPorts.get(key);
+  httpuvDebugLog("sw-ws-push", {
+    handle: key,
+    wsType: msg.wsType,
+    messageLen: messageBodyLength(msg.message),
+    hasPort: Boolean(port),
+    queuedBefore: queuedWsPush.get(key)?.length ?? 0,
   });
+
+  if (port) {
+    if (postWsPushToPort(port, key, msg)) {
+      // Also flush anything left from a partial register drain.
+      const queued = queuedWsPush.get(key);
+      if (queued && queued.length > 0) {
+        queuedWsPush.delete(key);
+        while (queued.length > 0) {
+          const next = queued[0]!;
+          if (!postWsPushToPort(port, key, next)) {
+            queuedWsPush.set(key, queued);
+            clearSessionPort(key);
+            requestSessionPortReregister(key);
+            break;
+          }
+          queued.shift();
+        }
+      }
+      return;
+    }
+    // Port looks dead (common after the browser stops the SW while idle).
+    clearSessionPort(key);
+    queueWsPush(key, msg);
+    requestSessionPortReregister(key);
+    return;
+  }
+
+  queueWsPush(key, msg);
+  requestSessionPortReregister(key);
+}
+
+/** Legacy recv long-poll is retired; clients must REGISTER_SESSION. */
+function handleSessionRecv(): Response {
+  return new Response("session recv long-poll is retired; use REGISTER_SESSION MessagePort", {
+    status: 410,
+    headers: { "Content-Type": "text/plain" },
+  });
+}
+
+function isShinyAppClientUrl(url: string): boolean {
+  try {
+    const pathname = new URL(url).pathname;
+    return pathname.startsWith(shinyAppPrefix) || pathname.startsWith(SHINY_PREFIX);
+  } catch {
+    return false;
+  }
 }
 
 async function getHostClient(): Promise<Client | undefined> {
@@ -581,7 +707,9 @@ async function getHostClient(): Promise<Client | undefined> {
     type: "window",
     includeUncontrolled: true,
   });
-  return clients[0];
+  // Prefer the Lucent shell over the /shiny/ iframe. Chromium often returns the
+  // focused iframe first after idle; that client does not handle host control msgs.
+  return clients.find((c) => !isShinyAppClientUrl(c.url)) ?? clients[0];
 }
 
 function handleHostOutboundMessage(msg: HostOutbound): void {
@@ -733,7 +861,7 @@ swSelf.addEventListener("fetch", (event) => {
     parseSessionAction(event.request.url, shinyAppPrefix) ??
     parseSessionAction(event.request.url, SHINY_PREFIX);
   if (session?.action === "recv") {
-    event.respondWith(handleSessionRecv(event));
+    event.respondWith(handleSessionRecv());
     return;
   }
 
@@ -756,6 +884,23 @@ swSelf.addEventListener("message", (event) => {
     // Soft roll: keep in-flight waitForRwasmHost() waiters alive across handoff.
     rollRwasmHostWaiter();
     void connectSwToWorker(port);
+    return;
+  }
+
+  if (msg.type === MSG.REGISTER_SESSION && event.ports[0]) {
+    const handle = normalizeSessionHandle(msg.handle);
+    if (!handle) {
+      httpuvDebugLog("sw-session-register-missing-handle");
+      try {
+        event.ports[0].close();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    const source = event.source;
+    const clientId = source && "id" in source ? String(source.id) : undefined;
+    registerSessionPort(handle, event.ports[0], clientId);
     return;
   }
 
@@ -830,13 +975,11 @@ swSelf.addEventListener("message", (event) => {
         pending.reject(new Error("httpuv stopped"));
         pendingHttp.delete(uuid);
       }
-      for (const [, waiters] of pendingRecv) {
-        for (const waiter of waiters) {
-          clearTimeout(waiter.timer);
-          waiter.resolve(new Response(null, { status: 204 }));
-        }
+      for (const handle of [...sessionPorts.keys()]) {
+        clearSessionPort(handle);
       }
-      pendingRecv.clear();
+      sessionClientIds.clear();
+      sessionPortReregisterPending.clear();
       queuedWsPush.clear();
       hostClientId = null;
       if (rwasmHost) {
