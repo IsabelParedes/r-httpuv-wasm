@@ -1,3 +1,18 @@
+// src/constants.ts
+var WS_FRAME = {
+  SEND: "websocket.send",
+  CLOSE: "websocket.close"
+};
+var MSG = {
+  WS_PUSH: "httpuv_ws_push",
+  /** Iframe → SW: transfer a MessagePort for session WS push delivery. */
+  REGISTER_SESSION: "httpuv_register_session",
+  /** SW → iframe (on session port): registration accepted. */
+  SESSION_ACK: "httpuv_session_ack",
+  /** SW → iframe client: session MessagePort was lost (e.g. SW idle restart); re-REGISTER_SESSION. */
+  REQUEST_SESSION_PORT: "httpuv_request_session_port"
+};
+
 // src/debug.ts
 function isHttpuvDebug() {
   if (globalThis.__HTTPUV_DEBUG__) {
@@ -31,6 +46,7 @@ function httpuvDebugLog(stage, ...args) {
 }
 
 // src/shiny-socket.ts
+var SESSION_REGISTER_TIMEOUT_MS = 5e3;
 function sessionUrl(action, opts = {}) {
   const base = new URL("__session__/", location.href);
   const url = new URL(action.replace(/^\//, ""), base);
@@ -39,13 +55,15 @@ function sessionUrl(action, opts = {}) {
   }
   return url.href;
 }
+var socketsByHandle = /* @__PURE__ */ new Map();
 var _VirtualShinySocket = class _VirtualShinySocket {
   constructor() {
     this.readyState = _VirtualShinySocket.CONNECTING;
     this.binaryType = "arraybuffer";
     this._handle = null;
-    this._recvActive = false;
-    this._recvBootResolve = null;
+    this._active = false;
+    this._port = null;
+    this._registering = null;
     this.onopen = null;
     this.onmessage = null;
     this.onclose = null;
@@ -66,71 +84,142 @@ var _VirtualShinySocket = class _VirtualShinySocket {
       }
       this._handle = String(handle);
       this.readyState = _VirtualShinySocket.OPEN;
-      this._recvActive = true;
-      const recvBoot = new Promise((resolve) => {
-        this._recvBootResolve = resolve;
-      });
-      void this._recvLoop();
-      await recvBoot;
+      this._active = true;
+      socketsByHandle.set(this._handle, this);
+      await this.ensurePort();
       this.onopen?.(new Event("open"));
     } catch (err) {
       console.error("[shiny-socket] connect failed", err);
+      this._teardownPort();
       this.readyState = _VirtualShinySocket.CLOSED;
       this.onerror?.(new Event("error"));
       this.onclose?.(new CloseEvent("close", { code: 1006, wasClean: false }));
     }
   }
-  async _recvLoop() {
-    while (this._recvActive && this._handle) {
+  /**
+   * Ensure the SW has a live MessagePort for this session.
+   * Safe to call repeatedly after idle SW restarts.
+   */
+  ensurePort() {
+    if (!this._active || !this._handle) {
+      return Promise.resolve();
+    }
+    if (this._registering) {
+      return this._registering;
+    }
+    this._registering = this._registerSessionPort(this._handle).finally(() => {
+      this._registering = null;
+    });
+    return this._registering;
+  }
+  /** Hand a MessagePort to the SW and wait for SESSION_ACK. */
+  async _registerSessionPort(handle) {
+    const controller = navigator.serviceWorker?.controller;
+    if (!controller) {
+      throw new Error("no service worker controller for session port");
+    }
+    if (this._port) {
       try {
-        const recvUrl = sessionUrl("recv", { handle: this._handle });
-        if (this._recvBootResolve) {
-          httpuvDebugLog("socket-recv-start", recvUrl);
-          this._recvBootResolve();
-          this._recvBootResolve = null;
-        }
-        const res = await fetch(recvUrl);
-        if (!this._recvActive) {
-          return;
-        }
-        if (res.status === 204) {
-          continue;
-        }
-        if (!res.ok) {
-          throw new Error(`session recv failed: HTTP ${res.status}`);
-        }
-        const wsType = res.headers.get("X-Httpuv-WS-Type") ?? "websocket.send";
-        if (wsType === "websocket.close") {
-          let code = 1e3;
-          let reason = "";
-          try {
-            const text = await res.text();
-            if (text) {
-              const payload = JSON.parse(text);
-              code = Number(payload.code ?? code);
-              reason = String(payload.reason ?? "");
-            }
-          } catch {
-          }
-          this._finishClose(code, reason, true);
-          return;
-        }
-        const wsBinary = res.headers.get("X-Httpuv-WS-Binary") === "1";
-        const data = wsBinary ? await res.arrayBuffer() : await res.text();
-        httpuvDebugLog("socket-recv", {
-          wsType,
-          binary: wsBinary,
-          bytes: typeof data === "string" ? data.length : data.byteLength
-        });
-        this.onmessage?.(new MessageEvent("message", { data }));
-      } catch (err) {
-        if (!this._recvActive) {
-          return;
-        }
-        console.error("[shiny-socket] recv loop error", err);
-        this._finishClose(1006, String(err), false);
-        return;
+        this._port.close();
+      } catch {
       }
+      this._port = null;
+    }
+    const channel = new MessageChannel();
+    this._port = channel.port1;
+    const acked = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("session port registration timed out"));
+      }, SESSION_REGISTER_TIMEOUT_MS);
+      this._port.onmessage = (event) => {
+        const data = event.data;
+        if (data?.type === MSG.SESSION_ACK) {
+          clearTimeout(timer);
+          this._port.onmessage = (ev) => this._onPortMessage(ev);
+          resolve();
+          return;
+        }
+        this._onPortMessage(event);
+      };
+      this._port.onmessageerror = () => {
+        clearTimeout(timer);
+        reject(new Error("session port messageerror"));
+      };
+    });
+    httpuvDebugLog("socket-register-session", { handle });
+    controller.postMessage({ type: MSG.REGISTER_SESSION, handle }, [channel.port2]);
+    await acked;
+  }
+  _onPortMessage(event) {
+    if (!this._active) {
+      return;
+    }
+    const data = event.data;
+    if (!data || typeof data !== "object") {
+      return;
+    }
+    if (data.type !== MSG.WS_PUSH && data.wsType == null && data.message === void 0) {
+      return;
+    }
+    const wsType = data.wsType ?? WS_FRAME.SEND;
+    if (wsType === WS_FRAME.CLOSE) {
+      let code = 1e3;
+      let reason = "";
+      try {
+        const raw = data.message;
+        if (typeof raw === "string" && raw) {
+          const payload2 = JSON.parse(raw);
+          code = Number(payload2.code ?? code);
+          reason = String(payload2.reason ?? "");
+        }
+      } catch {
+      }
+      this._finishClose(code, reason, true);
+      return;
+    }
+    const binary = Boolean(data.binary);
+    let payload;
+    if (binary) {
+      if (data.message instanceof ArrayBuffer) {
+        payload = data.message;
+      } else if (ArrayBuffer.isView(data.message)) {
+        const view = data.message;
+        payload = view.buffer.slice(
+          view.byteOffset,
+          view.byteOffset + view.byteLength
+        );
+      } else if (typeof data.message === "string") {
+        payload = data.message;
+      } else {
+        payload = new ArrayBuffer(0);
+      }
+    } else if (typeof data.message === "string") {
+      payload = data.message;
+    } else if (data.message instanceof ArrayBuffer) {
+      payload = new TextDecoder().decode(data.message);
+    } else if (ArrayBuffer.isView(data.message)) {
+      payload = new TextDecoder().decode(data.message);
+    } else {
+      payload = String(data.message ?? "");
+    }
+    httpuvDebugLog("socket-recv", {
+      wsType,
+      binary,
+      bytes: typeof payload === "string" ? payload.length : payload.byteLength
+    });
+    this.onmessage?.(new MessageEvent("message", { data: payload }));
+  }
+  _teardownPort() {
+    this._active = false;
+    if (this._handle) {
+      socketsByHandle.delete(this._handle);
+    }
+    if (this._port) {
+      try {
+        this._port.close();
+      } catch {
+      }
+      this._port = null;
     }
   }
   send(data) {
@@ -153,16 +242,21 @@ var _VirtualShinySocket = class _VirtualShinySocket {
       byteLen = data.byteLength;
       isBinary = true;
     }
-    const sendUrl = sessionUrl("send", { handle: this._handle });
+    const handle = this._handle;
+    const sendUrl = sessionUrl("send", { handle });
     httpuvDebugLog("socket-send", sendUrl, {
       binary: isBinary,
       bytes: byteLen
     });
-    void fetch(sendUrl, {
-      method: "POST",
-      headers: isBinary ? {} : { "Content-Type": "text/plain; charset=UTF-8" },
-      body
-    }).catch((err) => {
+    void this.ensurePort().catch((err) => {
+      console.warn("[shiny-socket] ensurePort before send failed", err);
+    }).then(
+      () => fetch(sendUrl, {
+        method: "POST",
+        headers: isBinary ? {} : { "Content-Type": "text/plain; charset=UTF-8" },
+        body
+      })
+    ).catch((err) => {
       console.error("[shiny-socket] send failed", err);
     });
   }
@@ -172,7 +266,7 @@ var _VirtualShinySocket = class _VirtualShinySocket {
     }
     this.readyState = _VirtualShinySocket.CLOSING;
     const handle = this._handle;
-    this._recvActive = false;
+    this._active = false;
     if (handle) {
       const closeUrl = sessionUrl("close", { handle });
       void fetch(closeUrl, {
@@ -186,7 +280,10 @@ var _VirtualShinySocket = class _VirtualShinySocket {
     this._finishClose(code, reason, true);
   }
   _finishClose(code, reason, wasClean) {
-    this._recvActive = false;
+    if (this.readyState === _VirtualShinySocket.CLOSED) {
+      return;
+    }
+    this._teardownPort();
     this.readyState = _VirtualShinySocket.CLOSED;
     this.onclose?.(new CloseEvent("close", { code, reason, wasClean }));
   }
@@ -196,6 +293,41 @@ _VirtualShinySocket.OPEN = 1;
 _VirtualShinySocket.CLOSING = 2;
 _VirtualShinySocket.CLOSED = 3;
 var VirtualShinySocket = _VirtualShinySocket;
+function reregisterAllSockets() {
+  for (const sock of socketsByHandle.values()) {
+    void sock.ensurePort().catch((err) => {
+      console.warn("[shiny-socket] ensurePort failed", err);
+    });
+  }
+}
+function installSessionPortRecovery() {
+  if (typeof navigator === "undefined" || !navigator.serviceWorker) {
+    return;
+  }
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const data = event.data;
+    if (!data || data.type !== MSG.REQUEST_SESSION_PORT) {
+      return;
+    }
+    const handle = data.handle ? String(data.handle) : "";
+    const sock = handle ? socketsByHandle.get(handle) : void 0;
+    if (sock) {
+      void sock.ensurePort().catch((err) => {
+        console.warn("[shiny-socket] REQUEST_SESSION_PORT ensurePort failed", err);
+      });
+      return;
+    }
+    reregisterAllSockets();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      reregisterAllSockets();
+    }
+  });
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    reregisterAllSockets();
+  });
+}
 function installVirtualShinySocket() {
   const factory = () => new VirtualShinySocket();
   const apply = () => {
@@ -207,6 +339,7 @@ function installVirtualShinySocket() {
   };
   apply();
   document.addEventListener("DOMContentLoaded", apply, { once: true });
+  installSessionPortRecovery();
   httpuvDebugLog("shiny-socket-installed");
 }
 installVirtualShinySocket();

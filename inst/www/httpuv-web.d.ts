@@ -64,7 +64,7 @@ interface HttpuvModule {
     bindInvokeROption?: (fn: InvokeROption) => void;
     /** Shiny host mode: request an immediate host service wake. */
     requestHostService?: () => void;
-    /** Shiny host mode: wake after delayMs (setTimeout → rAF). */
+    /** Shiny host mode: wake after delayMs (setTimeout → MessageChannel). */
     scheduleHostDelay?: (delayMs: number) => void;
     _swListenerInstalled?: boolean;
     [key: string]: unknown;
@@ -135,8 +135,6 @@ declare const WS_FRAME: {
 declare const WASM_R_HOME = "/lib/R";
 /** Max time the service worker waits for the R worker to answer a request. */
 declare const REQUEST_TIMEOUT_MS = 180000;
-/** Max time a session recv long-poll waits before returning 204. */
-declare const SESSION_RECV_TIMEOUT_MS = 25000;
 /** Message types exchanged between the service worker and the main page. */
 declare const MSG: {
     readonly REGISTER_HOST: "httpuv_register_host";
@@ -152,6 +150,12 @@ declare const MSG: {
     readonly REGISTER_RESOURCE_PATHS: "httpuv_register_resource_paths";
     /** SW -> host: Comlink to the R worker was lost (e.g. after SW update). */
     readonly REQUEST_COMLINK: "httpuv_request_comlink";
+    /** Iframe → SW: transfer a MessagePort for session WS push delivery. */
+    readonly REGISTER_SESSION: "httpuv_register_session";
+    /** SW → iframe (on session port): registration accepted. */
+    readonly SESSION_ACK: "httpuv_session_ack";
+    /** SW → iframe client: session MessagePort was lost (e.g. SW idle restart); re-REGISTER_SESSION. */
+    readonly REQUEST_SESSION_PORT: "httpuv_request_session_port";
 };
 /** Bypass SW app-document cache (warmup must hit R so deps register). */
 declare const WARMUP_REQUEST_HEADER = "X-Shiny-Forge-Warmup";
@@ -207,7 +211,7 @@ declare function normalizeSessionHandle(handle: unknown): string;
 declare function resolveSessionPrefix(fromUrl: string | URL): string;
 declare function getSessionPrefix(): string;
 declare function parseSessionAction(urlString: string, prefix: string): SessionAction | null;
-/** Session HTTP actions handled by the R worker (not SW long-poll recv). */
+/** Session HTTP actions handled by the R worker (not SW MessagePort delivery). */
 declare function isSessionHttpRequest(urlString: string, prefix?: string): boolean;
 declare function isHostPushUrl(urlString: string, prefix: string): boolean;
 /**
@@ -256,4 +260,4 @@ interface RHostApi {
 
 declare const HTTPUV_TRANSPORT_VERSION = "0.0.0";
 
-export { CHANNEL, COMLINK, type ChannelMessage, type ChannelMessageData, HOST_DIR, HTTPUV_OPTIONS, HTTPUV_TRANSPORT_VERSION, type HeaderMap, type HostInboundMessage, type HttpRequestInput, type HttpResponsePayload, type HttpuvBridgeOptions, type HttpuvChannel, type HttpuvModule, type InvokeROption, MSG, type OutboundDeliver, type PendingResponse, REQUEST_TIMEOUT_MS, type RHostApi, SESSION_DIR, SESSION_RECV_TIMEOUT_MS, type SessionAction, type SwDeliveryApi, WARMUP_REQUEST_HEADER, WASM_R_HOME, WS_FRAME, type WsPushPayload, buildReq, channelMessageToRExpr, dispatch, drainInboundChannel, enableHttpuvDebug, flushDeferredOutbound, getHostPrefixDir, getSessionPrefix, getShinyPrefix, handleInboundHostMessage, httpuvDebugLog, injectShinySocketBootstrap, installHttpuvBridge, isHostPushUrl, isHttpuvDebug, isLikelyStaticAsset, isSessionHttpRequest, jsonForR, normalizeSessionHandle, parseSessionAction, pushInboundChannelMessage, pushInboundHostMessage, resolveSessionPrefix, resolveShinyPrefix, serializeReqForR, setHostPrefixDir, setInvokeROption, setPushToR, setShinyPrefix, shinyAppUrl, shinySocketScriptUrl, tryGetHostPrefixDir };
+export { CHANNEL, COMLINK, type ChannelMessage, type ChannelMessageData, HOST_DIR, HTTPUV_OPTIONS, HTTPUV_TRANSPORT_VERSION, type HeaderMap, type HostInboundMessage, type HttpRequestInput, type HttpResponsePayload, type HttpuvBridgeOptions, type HttpuvChannel, type HttpuvModule, type InvokeROption, MSG, type OutboundDeliver, type PendingResponse, REQUEST_TIMEOUT_MS, type RHostApi, SESSION_DIR, type SessionAction, type SwDeliveryApi, WARMUP_REQUEST_HEADER, WASM_R_HOME, WS_FRAME, type WsPushPayload, buildReq, channelMessageToRExpr, dispatch, drainInboundChannel, enableHttpuvDebug, flushDeferredOutbound, getHostPrefixDir, getSessionPrefix, getShinyPrefix, handleInboundHostMessage, httpuvDebugLog, injectShinySocketBootstrap, installHttpuvBridge, isHostPushUrl, isHttpuvDebug, isLikelyStaticAsset, isSessionHttpRequest, jsonForR, normalizeSessionHandle, parseSessionAction, pushInboundChannelMessage, pushInboundHostMessage, resolveSessionPrefix, resolveShinyPrefix, serializeReqForR, setHostPrefixDir, setInvokeROption, setPushToR, setShinyPrefix, shinyAppUrl, shinySocketScriptUrl, tryGetHostPrefixDir };

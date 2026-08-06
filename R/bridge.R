@@ -87,9 +87,11 @@ httpuv_format_tcp_response <- function(resp) {
 
   if (is.raw(body)) {
     # Integer-array JSON for raw bodies blows up in WASM (jquery/shiny.min.js).
+    # jsonlite::base64_enc() already returns a character string — do not wrap
+    # with rawToChar() (that errors: "argument 'x' must be a raw vector").
     body <- list(
       httpuvRaw = "base64",
-      data = rawToChar(jsonlite::base64_enc(body))
+      data = jsonlite::base64_enc(body)
     )
   } else if (is.null(body)) {
     body <- list()

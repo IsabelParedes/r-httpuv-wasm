@@ -5,7 +5,6 @@ var WS_FRAME = {
 };
 var WASM_R_HOME = "/lib/R";
 var REQUEST_TIMEOUT_MS = 18e4;
-var SESSION_RECV_TIMEOUT_MS = 25e3;
 var MSG = {
   REGISTER_HOST: "httpuv_register_host",
   HTTP_REQUEST: "httpuv_http_request",
@@ -19,7 +18,13 @@ var MSG = {
   /** R worker -> SW mapping of addResourcePath prefixes to VFS directories. */
   REGISTER_RESOURCE_PATHS: "httpuv_register_resource_paths",
   /** SW -> host: Comlink to the R worker was lost (e.g. after SW update). */
-  REQUEST_COMLINK: "httpuv_request_comlink"
+  REQUEST_COMLINK: "httpuv_request_comlink",
+  /** Iframe → SW: transfer a MessagePort for session WS push delivery. */
+  REGISTER_SESSION: "httpuv_register_session",
+  /** SW → iframe (on session port): registration accepted. */
+  SESSION_ACK: "httpuv_session_ack",
+  /** SW → iframe client: session MessagePort was lost (e.g. SW idle restart); re-REGISTER_SESSION. */
+  REQUEST_SESSION_PORT: "httpuv_request_session_port"
 };
 var WARMUP_REQUEST_HEADER = "X-Shiny-Forge-Warmup";
 var CHANNEL = {
@@ -791,6 +796,6 @@ function channelMessageToRExpr(msg) {
 // src/index.ts
 var HTTPUV_TRANSPORT_VERSION = "0.0.0";
 
-export { CHANNEL, COMLINK, HOST_DIR, HTTPUV_OPTIONS, HTTPUV_TRANSPORT_VERSION, MSG, REQUEST_TIMEOUT_MS, SESSION_DIR, SESSION_RECV_TIMEOUT_MS, WARMUP_REQUEST_HEADER, WASM_R_HOME, WS_FRAME, buildReq, channelMessageToRExpr, dispatch, drainInboundChannel, enableHttpuvDebug, flushDeferredOutbound, getHostPrefixDir, getSessionPrefix, getShinyPrefix, handleInboundHostMessage, httpuvDebugLog, injectShinySocketBootstrap, installHttpuvBridge, isHostPushUrl, isHttpuvDebug, isLikelyStaticAsset, isSessionHttpRequest, jsonForR, normalizeSessionHandle, parseSessionAction, pushInboundChannelMessage, pushInboundHostMessage, resolveSessionPrefix, resolveShinyPrefix, serializeReqForR, setHostPrefixDir, setInvokeROption, setPushToR, setShinyPrefix, shinyAppUrl, shinySocketScriptUrl, tryGetHostPrefixDir };
+export { CHANNEL, COMLINK, HOST_DIR, HTTPUV_OPTIONS, HTTPUV_TRANSPORT_VERSION, MSG, REQUEST_TIMEOUT_MS, SESSION_DIR, WARMUP_REQUEST_HEADER, WASM_R_HOME, WS_FRAME, buildReq, channelMessageToRExpr, dispatch, drainInboundChannel, enableHttpuvDebug, flushDeferredOutbound, getHostPrefixDir, getSessionPrefix, getShinyPrefix, handleInboundHostMessage, httpuvDebugLog, injectShinySocketBootstrap, installHttpuvBridge, isHostPushUrl, isHttpuvDebug, isLikelyStaticAsset, isSessionHttpRequest, jsonForR, normalizeSessionHandle, parseSessionAction, pushInboundChannelMessage, pushInboundHostMessage, resolveSessionPrefix, resolveShinyPrefix, serializeReqForR, setHostPrefixDir, setInvokeROption, setPushToR, setShinyPrefix, shinyAppUrl, shinySocketScriptUrl, tryGetHostPrefixDir };
 //# sourceMappingURL=httpuv-web.js.map
 //# sourceMappingURL=httpuv-web.js.map
