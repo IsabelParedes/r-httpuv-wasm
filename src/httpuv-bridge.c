@@ -3,9 +3,14 @@
 #include <R_ext/Rdynload.h>
 #include <R_ext/Visibility.h>
 
-#include <emscripten.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+#ifdef __EMSCRIPTEN__
 
 static SEXP httpuv_eval_js(SEXP code) {
   if (!Rf_isString(code) || LENGTH(code) < 1) {
@@ -55,6 +60,30 @@ static SEXP httpuv_channel_write_json(SEXP json) {
   }, payload);
   return R_NilValue;
 }
+
+#else
+
+/* Native Linux/macOS build: WASM bridge is unused; stubs satisfy .Call registration. */
+
+static SEXP httpuv_eval_js(SEXP code) {
+  (void) code;
+  return R_NilValue;
+}
+
+static SEXP httpuv_channel_has_message(void) {
+  return ScalarLogical(0);
+}
+
+static SEXP httpuv_channel_read_json(void) {
+  return R_NilValue;
+}
+
+static SEXP httpuv_channel_write_json(SEXP json) {
+  (void) json;
+  return R_NilValue;
+}
+
+#endif
 
 static const R_CallMethodDef callMethods[] = {
   {"httpuv_eval_js_", (DL_FUNC) &httpuv_eval_js, 1},
