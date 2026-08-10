@@ -6,8 +6,8 @@ Authors@R: c(
     person("Isabel", "Paredes", , "isabel.paredes@quantstack.net", role = c("aut", "cre"))
   )
 Description: Browser-native httpuv for Shiny (Emscripten/WASM only).
-    Replaces libuv with a service-worker transport and JavaScript channel while
-    preserving the standard httpuv R API.
+    Replaces libuv with a service-worker transport (shipped by Lucent) and a
+    JavaScript channel while preserving the standard httpuv R API.
 License: GPL-3
 Encoding: UTF-8
 Depends:
