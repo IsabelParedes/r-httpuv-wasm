@@ -209,6 +209,14 @@ AppWrapper <- R6Class(
         } else {
           seek(req$.bodyData)
         }
+        # If the body file was rewound, fall back to CONTENT_LENGTH so
+        # session dataobj / DT ajax POSTs still expose rook.input bytes.
+        if (!is.null(body_len) && body_len == 0) {
+          cl <- suppressWarnings(as.integer(req$CONTENT_LENGTH %||% req$HTTP_CONTENT_LENGTH %||% NA_integer_))
+          if (!is.na(cl) && cl > 0L) {
+            body_len <- cl
+          }
+        }
         rookCall(private$app$call, req, req$.bodyData, body_len)
       }
 
