@@ -147,7 +147,9 @@ httpuv_build_req <- function(msg) {
   if (length(body) > 0) {
     req$.bodyData <- file(open = "w+b")
     writeBin(body, req$.bodyData)
-    seek(req$.bodyData, 0)
+    # Leave the pointer at EOF so AppWrapper$call's seek(.bodyData) returns
+    # the body length (native httpuv does the same after onBodyData writes).
+    # InputStream$initialize rewinds before reading.
     req$CONTENT_LENGTH <- as.character(length(body))
     if (!is.null(req$HTTP_CONTENT_TYPE)) {
       req$CONTENT_TYPE <- req$HTTP_CONTENT_TYPE
@@ -539,9 +541,13 @@ httpuv_js_req_to_rook <- function(req) {
 
   out <- req
   if (!is.null(out$body)) {
+    body <- httpuv_bytes_to_raw(out$body)
     out$.bodyData <- file(open = "w+b")
-    writeBin(httpuv_bytes_to_raw(out$body), out$.bodyData)
-    seek(out$.bodyData, 0)
+    writeBin(body, out$.bodyData)
+    # Leave pointer at EOF; AppWrapper$call measures length via seek().
+    if (is.null(out$CONTENT_LENGTH) && length(body) > 0) {
+      out$CONTENT_LENGTH <- as.character(length(body))
+    }
   }
   out
 }
